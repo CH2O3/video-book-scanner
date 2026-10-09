@@ -22,6 +22,9 @@ def _progress(stage: str, frac: float, msg: str) -> None:
 
 
 def _settings_from(args: argparse.Namespace) -> dict:
+    if getattr(args, "receipt", False):
+        return {"document": "receipt", "receipt_width_mm": getattr(args, "receipt_width_mm", None) or 80.0,
+                "auto_export": False if getattr(args, "always_review", False) else True}
     return {
         "layout": "single" if getattr(args, "single", False) else "spread",
         "direction": "rtl" if getattr(args, "rtl", False) else "ltr",
@@ -267,6 +270,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common_new(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--receipt", action="store_true", help="レシートを取り込む（見た目を変えず、項目を読み取って一覧にする）")
+        p.add_argument("--receipt-width-mm", type=float, help="レシートの幅mm（既定80。58も多い）")
         p.add_argument("--single", action="store_true", help="片ページ撮影（左右分割しない）")
         p.add_argument("--rtl", action="store_true", help="右から左へ読む本")
         p.add_argument("--expected-pages", type=int, help="予定ページ数（任意）")

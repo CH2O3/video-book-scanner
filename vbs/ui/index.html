@@ -260,7 +260,7 @@ function renderHeader() {
         "3 確認してPDFにする", nReview ? h("span", { class: "n" }, nReview) : null)),
     h("div", { class: "spacer" }),
     P ? h("button", { class: "small", title: S.root, onclick: () => api("/api/reveal", { what: "root" }).catch(showError) }, "保存先を開く") : null,
-    P ? h("button", { class: "small", disabled: JOB.running, onclick: () => { S = { project: null }; SEL = null; go("input"); } }, "別の本") : null);
+    P ? h("button", { class: "small", disabled: JOB.running, onclick: () => { S = { project: null }; SEL = null; go("input"); } }, "別のものを作る") : null);
 }
 
 function render() {
@@ -275,9 +275,11 @@ function render() {
 function dropZone() {
   const picker = h("input", { type: "file", multiple: true, accept: ".mp4,.mov,.m4v,.mkv,.jpg,.jpeg,.png", style: "display:none",
     onchange: (e) => addFiles([...e.target.files]) });
+  const isR = (S && S.receipts) || (pending.opts && pending.opts.document === "receipt");
   const drop = h("div", { class: "drop", onclick: () => picker.click() },
-    h("strong", {}, "ここに動画をドラッグ＆ドロップ"),
-    "またはクリックして選ぶ（MP4・MOV。足りないページの写真 JPEG・PNG も可）");
+    h("strong", {}, isR ? "ここに動画や写真をドラッグ＆ドロップ" : "ここに動画をドラッグ＆ドロップ"),
+    isR ? "またはクリックして選ぶ（MP4・MOV、写真は JPEG・PNG。何枚でもまとめて入れられます）"
+      : "またはクリックして選ぶ（MP4・MOV。足りないページの写真 JPEG・PNG も可）");
   drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
@@ -303,7 +305,7 @@ function viewInput() {
   const items = dz.items;
 
   if (P) {
-    wrap.append(h("div", { class: "panel" }, h("h2", {}, "この本の動画"),
+    wrap.append(h("div", { class: "panel" }, h("h2", {}, S.receipts ? "取り込んだ動画・写真" : "この本の動画"),
       P.videos.length ? h("ul", { class: "filelist" }, P.videos.map((v, i) => h("li", {},
         h("span", {}, `${i + 1}.`), h("span", { style: "flex:1" }, v.original_name),
         h("span", { class: "muted" }, `${Math.round(v.duration_sec || 0)}秒`),
@@ -320,47 +322,59 @@ function viewInput() {
     return wrap;
   }
 
+  pending.opts = pending.opts || { document: "book", direction: "ltr", layout: "spread", receipt_width_mm: "80" };
+  const isR = pending.opts.document === "receipt";
   const firstName = items.length ? items[0].name.split(/[\\/]/).pop().replace(/\.[^.]+$/, "") : "";
-  const tv = pending.title ?? firstName;
+  const today = new Date();
+  const tv = pending.title ?? (isR ? `レシート_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}` : firstName);
   const dest = h("input", { type: "text", class: "wide", value: pending.dest ?? joinPath(HOME.default_dir, safe(tv || "book")),
     oninput: (e) => { pending.dest = e.target.value; } });
-  const title = h("input", { type: "text", class: "wide", value: tv, placeholder: "書名（PDFの名前）",
+  const title = h("input", { type: "text", class: "wide", value: tv, placeholder: isR ? "まとめの名前（例：レシート_2024-06）" : "書名（PDFの名前）",
     oninput: (e) => { pending.title = e.target.value; if (pending.dest == null) dest.value = joinPath(HOME.default_dir, safe(e.target.value || "book")); } });
-  pending.opts = pending.opts || { direction: "ltr", layout: "spread" };
   const segBtn = (key, val, label) => h("button", { class: pending.opts[key] === val ? "on" : "", onclick: () => { pending.opts[key] = val; render(); } }, label);
   const adv = pending.adv = pending.adv || {};
   const field = (label, el) => h("label", { class: "f" }, label, el);
   const sel = (key, options, def) => h("select", { onchange: (e) => { adv[key] = e.target.value; } },
     options.map(([v, t]) => { const o = h("option", { value: String(v) }, t); o.selected = String(adv[key] ?? def) === String(v); return o; }));
   const num = (key, ph) => h("input", { type: "number", placeholder: ph, value: adv[key] ?? "", oninput: (e) => { adv[key] = e.target.value; } });
+  const kind = h("div", { class: "seg" },
+    h("button", { class: !isR ? "on" : "", onclick: () => { pending.opts.document = "book"; pending.title = null; pending.dest = null; render(); } }, "📖 本"),
+    h("button", { class: isR ? "on" : "", onclick: () => { pending.opts.document = "receipt"; pending.title = null; pending.dest = null; render(); } }, "🧾 レシート"));
 
   wrap.append(
-    h("div", { class: "panel" }, h("h2", {}, "1. 動画を入れる"), dz.el),
+    h("div", { class: "panel" }, h("h2", {}, "1. 何を取り込みますか"), kind,
+      isR ? h("p", { class: "muted", style: "margin:10px 0 0" },
+        "レシートは見た目を変えずに（切り抜きと傾きの補正だけで）保存し、取引日・取引先・金額・登録番号を読み取って一覧にします。",
+        "動画でも写真でも入れられます。動画は1枚ずつ映していけば、手で押さえたままでも、文字に手が掛からない瞬間を選びます。") : null),
+    h("div", { class: "panel" }, h("h2", {}, isR ? "2. 動画・写真を入れる" : "2. 動画を入れる"), dz.el),
     h("div", { class: "panel" },
-      h("h2", {}, "2. 保存先と読み方"),
+      h("h2", {}, isR ? "3. 保存先" : "3. 保存先と読み方"),
       h("div", { style: "display:grid;gap:10px" },
-        field("書名", title),
+        field(isR ? "名前（PDF・一覧のファイル名）" : "書名", title),
         field("保存先フォルダ（新しく作られます）", dest),
+        isR ? h("div", { class: "row", style: "gap:24px" },
+          field("レシートの幅（解像度の確認とPDFの寸法に使います）", h("div", { class: "seg" },
+            segBtn("receipt_width_mm", "58", "58mm（小さめ）"), segBtn("receipt_width_mm", "80", "80mm（よくある幅）")))) :
         h("div", { class: "row", style: "gap:24px" },
           field("ページの順番", h("div", { class: "seg" }, segBtn("direction", "ltr", "左→右（横書きの本）"), segBtn("direction", "rtl", "右→左（縦書きの本）"))),
           field("撮り方", h("div", { class: "seg" }, segBtn("layout", "spread", "見開き"), segBtn("layout", "single", "1ページずつ"))))),
       h("details", { style: "margin-top:12px" }, h("summary", {}, "詳細な設定"),
         h("div", { class: "grid2" },
-          field("予定ページ数（任意。違えば知らせます）", num("expected_pages", "例 220")),
-          field("紙の高さ（mm、PDFの寸法）", num("page_height_mm", "257（B5）")),
-          field("湾曲補正", sel("dewarp", [["auto", "曲がりが大きいページだけ"], ["off", "しない"]], "auto")),
-          field("余白の整理", sel("margins", [["content_box", "本文の外を白に"], ["off", "しない"]], "content_box")),
-          field("文字認識の区切り方", sel("ocr_psm", [[6, "1段組の本（標準）"], [3, "段組みが多い本"]], 6)),
+          isR ? null : field("予定ページ数（任意。違えば知らせます）", num("expected_pages", "例 220")),
+          isR ? null : field("紙の高さ（mm、PDFの寸法）", num("page_height_mm", "257（B5）")),
+          isR ? null : field("湾曲補正", sel("dewarp", [["auto", "曲がりが大きいページだけ"], ["off", "しない"]], "auto")),
+          isR ? null : field("余白の整理", sel("margins", [["content_box", "本文の外を白に"], ["off", "しない"]], "content_box")),
+          isR ? null : field("文字認識の区切り方", sel("ocr_psm", [[6, "1段組の本（標準）"], [3, "段組みが多い本"]], 6)),
           field("要確認がないとき", sel("auto_export", [[true, "自動でPDFを作る"], [false, "作らずに待つ"]], true)),
-          field("代表フレームの選び方", sel("candidate_still_both_ways", [[false, "標準"], [true, "動き出す直前を避ける（試験中）"]], false)),
+          isR ? null : field("代表フレームの選び方", sel("candidate_still_both_ways", [[false, "標準"], [true, "動き出す直前を避ける（試験中）"]], false)),
           field("HDR動画（PQ方式）", sel("allow_hdr", [[false, "受け付けない"], [true, "受け付ける（色は検証外）"]], false))))),
     h("div", { class: "row", style: "margin-bottom:14px" },
       h("button", { class: "primary big", disabled: !items.length, onclick: () => startNew(title.value, dest.value) }, "処理を開始"),
-      h("span", { class: "muted" }, items.length ? "途中で閉じても、あとで「前に作った本を開く」から続きを再開できます" : "動画を入れると開始できます")));
+      h("span", { class: "muted" }, items.length ? "途中で閉じても、あとで「前に作ったものを開く」から続きを再開できます" : (isR ? "動画か写真を入れると開始できます" : "動画を入れると開始できます"))));
 
   const recent = HOME.recent || [];
   const openPath = h("input", { type: "text", class: "wide", placeholder: "フォルダの場所を貼り付けて開く" });
-  wrap.append(h("div", { class: "panel" }, h("h2", {}, "前に作った本を開く"),
+  wrap.append(h("div", { class: "panel" }, h("h2", {}, "前に作ったものを開く"),
     recent.length ? h("ul", { class: "filelist" }, recent.map(r => h("li", {},
       h("span", { style: "flex:1;min-width:0" }, h("b", {}, r.title || "（書名なし）"), h("div", { class: "muted", style: "font-size:12px;word-break:break-all" }, r.path)),
       h("button", { onclick: () => openProject(r.path) }, "開く")))) : h("p", { class: "muted" }, "まだありません"),
@@ -406,7 +420,9 @@ async function uploadAll() {
 }
 async function startNew(title, dest) {
   try {
-    const st = { direction: pending.opts.direction, layout: pending.opts.layout };
+    const st = pending.opts.document === "receipt"
+      ? { document: "receipt", receipt_width_mm: pending.opts.receipt_width_mm }
+      : { document: "book", direction: pending.opts.direction, layout: pending.opts.layout };
     for (const [k, v] of Object.entries(pending.adv || {})) if (k !== "allow_hdr" && v !== "") st[k] = v;
     S = await api("/api/create", { path: dest, title: title || null, settings: st });
     await uploadAll();
@@ -503,23 +519,29 @@ function reasonsOf(sel) {
 
 function viewReview() {
   const P = S.project;
+  const isR = !!S.receipts;
   const items = itemsFor(FILTER);
   if (!SEL || !items.some(i => i.id === SEL.id)) SEL = items.length ? { kind: items[0].kind, id: items[0].id } : null;
   const counts = { review: itemsFor("review").length, all: P.order.length, unadopted: itemsFor("unadopted").length, excluded: itemsFor("excluded").length };
   const fbtn = (k, label, tip) => h("button", { class: "small " + (FILTER === k ? "on" : ""), title: tip, onclick: () => { FILTER = k; SEL = null; REORDER = false; PREVIEW_FRAME = null; render(); } }, `${label} ${counts[k]}`);
   const side = h("div", { class: "side" },
-    h("div", { class: "filters" }, fbtn("review", "要確認"), fbtn("all", "全ページ"),
+    h("div", { class: "filters" }, fbtn("review", "要確認"), fbtn("all", isR ? "全部" : "全ページ"),
       fbtn("unadopted", "未採用の区間", "静止が短い・重複と判断して使わなかった区間"), fbtn("excluded", "除外")),
-    FILTER === "all" ? h("div", { class: "filters" },
+    FILTER === "all" && isR ? h("div", { class: "filters" }, h("span", { class: "muted", style: "font-size:12px;align-self:center" }, "並べ方"),
+      [["shot", "撮影順"], ["date", "日付順"], ["payee", "取引先順"]].map(([k, t]) => h("button", {
+        class: "small " + ((P.receipt_sort || "shot") === k ? "on" : ""), title: "AIや手で直したあとの値で並べます",
+        onclick: () => act({ op: "sort_receipts", by: k }, `${t}に並べました`) }, t))) : null,
+    FILTER === "all" && !isR ? h("div", { class: "filters" },
       h("button", { class: "small " + (REORDER ? "on" : ""), onclick: () => { REORDER = !REORDER; render(); } }, REORDER ? "並べ替え中（ドラッグで移動）" : "並べ替える"),
       P.order_manual ? h("button", { class: "small", onclick: () => act({ op: "reset_order" }, "撮影順に戻しました") }, "撮影順に戻す") : null) : null,
     renderList(items));
   const pend = S.pending.length;
   const top = h("div", { class: "row", style: "padding:8px 18px;border-bottom:1px solid var(--line);background:var(--panel)" },
-    h("span", {}, S.review.length ? `要確認 ${S.review.length} 件` : "要確認はありません", h("span", { class: "muted" }, `　全 ${P.order.length} ページ`)),
+    h("span", {}, S.review.length ? `要確認 ${S.review.length} 件` : "要確認はありません", h("span", { class: "muted" }, `　全 ${P.order.length} ${isR ? "枚" : "ページ"}`)),
     pend ? h("span", { class: "chip warn" }, `未反映の変更 ${pend} 件`) : null,
     JOB.running ? h("span", { class: "chip" }, `処理中 ${Math.round((JOB.frac || 0) * 100)}%`) : null,
     h("div", { class: "spacer" }),
+    isR ? h("button", { disabled: JOB.running, onclick: importReceiptCsv, title: "AIや表計算ソフトで直した一覧（CSV）を取り込みます" }, "直した一覧を読み込む") : null,
     h("button", { class: pend ? "primary" : "", disabled: !pend || JOB.running, onclick: () => runPipeline(),
       title: "変更したページだけ作り直します" }, "変更を反映"),
     h("button", { class: !pend && !S.review.length ? "primary" : "", disabled: JOB.running || !P.order.length, onclick: exportPdf }, "PDFを出力"));
@@ -537,7 +559,9 @@ function renderList(items) {
     if (it.kind === "page") {
       img = fileUrl(it.page.thumb || it.page.image, it.page.revision);
       const n = P.order.indexOf(it.id);
-      cap = `${n >= 0 ? n + 1 : "-"}${it.page.side === "L" ? " 左" : it.page.side === "R" ? " 右" : ""}`;
+      const rf = S.receipts && S.receipts[it.id];
+      cap = rf ? `${n >= 0 ? n + 1 : "-"} ${rf.date ? rf.date.slice(5) : "日付?"} ${rf.total != null ? "¥" + rf.total.toLocaleString() : "¥?"}`
+        : `${n >= 0 ? n + 1 : "-"}${it.page.side === "L" ? " 左" : it.page.side === "R" ? " 右" : ""}`;
     } else if (it.kind === "segment") {
       const fid = it.seg.chosen || it.seg.candidates[0];
       img = fid ? fileUrl(frameOf(fid).thumb) : null;
@@ -572,6 +596,7 @@ function renderList(items) {
 
 function renderDetail() {
   const P = S.project;
+  const isR = !!S.receipts;
   if (!SEL) return h("div", { class: "panel" }, h("h2", {}, FILTER === "review" ? "要確認はありません" : "表示するものがありません"),
     FILTER === "review" ? [h("p", {}, "「全ページ」で並びを確かめて、「PDFを出力」を押してください。"),
       h("p", { class: "muted" }, "※ 撮影されなかったページがないことまでは確かめられません。ページ番号の抜けは目で確認してください。")] : null);
@@ -589,7 +614,7 @@ function renderDetail() {
   const n = page ? P.order.indexOf(page.id) : -1;
 
   const head = h("div", { class: "dhead" },
-    h("h2", {}, page ? `${n >= 0 ? n + 1 + "ページ目" : "除外中のページ"}${page.side === "L" ? "（左）" : page.side === "R" ? "（右）" : ""}`
+    h("h2", {}, page && isR ? (n >= 0 ? `No.${n + 1} のレシート` : "除外中のレシート") : page ? `${n >= 0 ? n + 1 + "ページ目" : "除外中のページ"}${page.side === "L" ? "（左）" : page.side === "R" ? "（右）" : ""}`
       : `未採用の区間（${fmtT(seg.start_sec)}〜${fmtT(seg.end_sec)}）`),
     h("div", { class: "chips" }, reasons.map(c => h("span", { class: "chip warn" }, S.labels[c] || c)),
       page && !page.include ? h("span", { class: "chip bad" }, "除外中") : null,
@@ -613,11 +638,11 @@ function renderDetail() {
   }
   const stage = h("div", { class: "stagebox" }, mainImg ? h("img", { src: mainImg, onclick: (e) => e.currentTarget.parentElement.classList.toggle("zoom") }) : h("p", { class: "muted" }, "画像がありません"));
   const viewBtns = page && !PREVIEW_FRAME ? h("div", { class: "row", style: "margin-bottom:8px" }, h("div", { class: "seg" },
-    [["final", "補正後"], ["plain", "補正前（切り抜きだけ）"], ["frame", "元の映像"]].map(([k, t]) => h("button", { class: VIEW === k ? "on" : "", onclick: () => { VIEW = k; render(); } }, t))),
+    (isR ? [["final", "保存する画像"], ["frame", "元の映像"]] : [["final", "補正後"], ["plain", "補正前（切り抜きだけ）"], ["frame", "元の映像"]]).map(([k, t]) => h("button", { class: VIEW === k ? "on" : "", onclick: () => { VIEW = k; render(); } }, t))),
     h("span", { class: "muted", style: "font-size:12px" }, "画像クリックで拡大")) : null;
 
   const cands = seg.candidates.length ? h("div", {},
-    h("h3", { style: "margin:14px 0 0;font-size:14px" }, `この見開きの候補（${seg.candidates.length}）`,
+    h("h3", { style: "margin:14px 0 0;font-size:14px" }, `${isR ? "このレシート" : "この見開き"}の候補（${seg.candidates.length}）`,
       h("span", { class: "muted", style: "font-weight:400;font-size:12px" }, "　クリックで大きく表示。指が入っていないものを選んでください")),
     h("div", { class: "cands" }, seg.candidates.map(fid => {
       const f = frameOf(fid);
@@ -635,18 +660,69 @@ function renderDetail() {
     seg.chosen && page ? [h("h3", {}, "切り抜き"),
       h("button", { onclick: () => openGeometry(seg) }, "分割線・切り抜きを直す…"),
       seg.manual_geometry ? h("button", { class: "small", onclick: () => act({ op: "clear_geometry", segment: seg.id }, "自動に戻しました") }, "自動の切り抜きに戻す") : null,
-      h("h3", {}, "補正（この見開きだけ）"),
-      h("div", { class: "seg" }, optBtn("dewarp", "auto", "湾曲補正する"), optBtn("dewarp", "off", "しない")),
-      h("div", { class: "seg" }, optBtn("margins", "content_box", "余白を白に"), optBtn("margins", "off", "そのまま"))] : null,
+      isR ? null : h("h3", {}, "補正（この見開きだけ）"),
+      isR ? null : h("div", { class: "seg" }, optBtn("dewarp", "auto", "湾曲補正する"), optBtn("dewarp", "off", "しない")),
+      isR ? null : h("div", { class: "seg" }, optBtn("margins", "content_box", "余白を白に"), optBtn("margins", "off", "そのまま"))] : null,
     h("h3", {}, "使う・使わない"),
-    page ? h("button", { onclick: () => act({ op: "include", id: page.id, value: !page.include }, page.include ? "除外しました" : "戻しました") }, page.include ? "このページを除外" : "このページを戻す") : null,
+    page ? h("button", { onclick: () => act({ op: "include", id: page.id, value: !page.include }, page.include ? "除外しました" : "戻しました") }, page.include ? (isR ? "このレシートを除外" : "このページを除外") : (isR ? "このレシートを戻す" : "このページを戻す")) : null,
     page && sameSeg.length > 1 && seg.include ? h("button", { class: "small", onclick: () => act({ op: "include", id: seg.id, value: false }, "見開きごと除外しました") }, "見開きごと除外") : null,
     !page ? h("button", { class: "primary", disabled: !seg.candidates.length, onclick: () => adoptSegment(seg) }, "この区間を採用する") : null,
     reasons.length ? h("button", { onclick: () => ackAll(page, seg) }, "問題なし（確認済みにする）") : null,
     page && page.ocr && page.ocr.error ? h("button", { onclick: () => act({ op: "image_only", page: page.id, value: true }, "画像だけで残します") }, "文字なし（画像だけ）で残す") : null,
     page && page.ocr && page.ocr.txt ? h("button", { class: "small", onclick: () => showOcr(page) }, "認識した文字を見る") : null);
 
-  return h("div", {}, head, h("div", { class: "viewer" }, h("div", { style: "min-width:0" }, banner, viewBtns, stage, cands), tools));
+  const form = isR && page && page.include ? receiptForm(page) : null;
+  return h("div", {}, head, h("div", { class: "viewer" }, h("div", { style: "min-width:0" }, banner, viewBtns, stage, cands), h("div", {}, form, tools)));
+}
+
+// ---------------------------------------------------------------- レシートの項目
+function receiptForm(page) {
+  const rec = page.receipt || {};
+  const auto = (rec.auto && rec.auto.fields) || {};
+  const ev = (rec.auto && rec.auto.evidence) || {};
+  const cur = S.receipts[page.id] || {};
+  const manual = rec.manual || {};
+  const L = S.receipt_labels;
+  const keys = ["date", "payee", "total", "base10", "base8", "tax", "registration_no", "note"];
+  const inputs = {};
+  const rows = keys.map(k => {
+    const inp = h("input", { type: k === "date" ? "date" : "text", class: "wide", value: cur[k] ?? "",
+      placeholder: k === "registration_no" ? "T1234567890123" : (k === "note" ? "読めない箇所など" : "") });
+    inputs[k] = inp;
+    const hint = k in manual ? `手で直した値（読み取りは「${auto[k] ?? "なし"}」）` : (ev[k] ? `根拠：${ev[k]}` : (k === "note" ? "" : "読み取れず"));
+    return h("label", { class: "f" }, h("span", {}, L[k], k in manual ? h("span", { class: "chip ok", style: "margin-left:6px" }, "修正済み") : null),
+      inp, hint ? h("span", { style: "font-size:11px;word-break:break-all" }, hint) : null);
+  });
+  const save = async () => {
+    const values = {};
+    for (const k of keys) values[k] = inputs[k].value;
+    await act({ op: "receipt_fields", page: page.id, values }, "保存しました");
+  };
+  return h("div", { class: "panel", style: "padding:12px;margin-bottom:10px" },
+    h("h3", { style: "margin:0 0 6px;font-size:14px" }, "読み取った項目"),
+    h("p", { class: "muted", style: "margin:0 0 8px;font-size:12px" }, "画像と見比べて直してください。読めない文字は推測で埋めず、空欄にしてメモに残します。"),
+    h("div", { style: "display:grid;gap:8px" }, rows),
+    h("div", { class: "row", style: "margin-top:10px" }, h("button", { class: "primary", onclick: save }, "保存")));
+}
+async function importReceiptCsv() {
+  const inp = h("input", { type: "file", accept: ".csv,text/csv" });
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    try {
+      const r = await fetch("/api/receipts_import", { method: "POST", headers: { "X-Token": TOKEN }, body: f });
+      const d = await r.json();
+      if (!r.ok) throw Object.assign(new Error(d.error), { actions: d.actions });
+      S = d; render();
+      const res = d.import_result;
+      modal(h("div", {}, h("h2", {}, "一覧を読み込みました"),
+        h("p", {}, `直した項目があったレシート ${res.changed} 枚、変更なし ${res.unchanged} 枚`),
+        res.errors.length ? h("div", { class: "err" }, res.errors.slice(0, 20).join("\n") + (res.errors.length > 20 ? "\n…" : "")) : null,
+        h("p", { class: "muted" }, "並べ替えたいときは「全部」タブの「日付順」「取引先順」を使ってください。最後に「PDFを出力」で一覧とPDFを作り直します。"),
+        h("div", { class: "row" }, h("div", { class: "spacer" }), h("button", { onclick: closeModal }, "閉じる"))));
+    } catch (e) { showError(e); }
+  };
+  inp.click();
 }
 async function useCandidate(seg, fid) {
   PREVIEW_FRAME = null;
@@ -722,8 +798,17 @@ async function exportPdf() {
   } catch (e) { showError(e); }
 }
 function exportDone(rec) {
+  const rf = rec.receipt_files;
+  const base = (x) => x.split(/[\\/]/).pop();
   modal(h("div", {}, h("h2", {}, "PDFができました"), h("p", { style: "word-break:break-all" }, rec.path),
     h("p", { class: "muted" }, `${rec.pages}ページ。保存したファイルを開き直して、ページ数と文字層があることを確かめました。`),
+    rf ? h("div", { class: "note" }, "一緒に作ったもの：",
+      h("ul", { style: "margin:4px 0 0" },
+        h("li", {}, `${base(rf.csv)}（一覧。Excelで開けます）`),
+        h("li", {}, `${base(rf.json)}（一覧と読み取りの根拠・全文。AI向け）`),
+        h("li", {}, `${base(rf.images)}（レシートごとの画像）`),
+        h("li", {}, `${base(rf.ai_request)}（AIに確認を頼むときの依頼文）`)),
+      h("p", { style: "margin:6px 0 0" }, "AIに確認を頼むときは、このフォルダごと（または依頼文・一覧・PDF）を渡してください。直った一覧は「直した一覧を読み込む」で取り込めます。")) : null,
     h("div", { class: "row" }, h("button", { class: "primary", onclick: () => api("/api/reveal", { what: "pdf" }).catch(showError) }, "PDFを開く"),
       h("button", { onclick: () => api("/api/reveal", { what: "output" }).catch(showError) }, "フォルダを開く"), h("div", { class: "spacer" }),
       h("button", { onclick: () => { closeModal(); go("review"); } }, "閉じる"))));

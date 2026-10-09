@@ -46,9 +46,37 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "candidate_format": "jpg",   # jpg（品質95） | png
     "enhance": "normalize",      # normalize（照明ムラ補正） | none
     "dewarp": "auto",
-    "margins": "content_box",    # 余白: content_box（内容の外を白に統一） | off            # 行の湾曲補正: auto | off
+    "margins": "content_box",    # 余白: content_box（内容の外を白に統一） | detect（手の検出だけ） | off
     "content_rotation": "auto",  # 紙面の向き: auto（文字から判定） | 0 | 90 | 180 | 270（反時計回り）
+    "document": "book",          # book（本） | receipt（レシート）
+    "dedupe": "merge",           # 同じ見開きの続けての静止: merge（まとめる） | flag（確認に回すだけ）
+    "receipt_width_mm": 80.0,    # レシートの幅（PDFの寸法と解像度の確認に使う）。58 か 80 が多い
 }
+
+# レシートは見た目を変えずに保存する（証憑として、切り抜きと傾き補正だけ）。
+# 同じ店のレシートは見た目が似ているので、重複は自動でまとめず確認へ回す
+RECEIPT_PRESET: dict[str, Any] = {
+    "layout": "single",
+    "enhance": "none",
+    "dewarp": "off",
+    "margins": "detect",
+    "dedupe": "flag",
+    "content_rotation": "auto",
+    "expected_pages": None,
+}
+
+
+def with_preset(settings: dict[str, Any] | None) -> dict[str, Any]:
+    """種類（本・レシート）の既定値に、明示された設定を重ねる."""
+    s = {k: v for k, v in (settings or {}).items() if v is not None}
+    merged = dict(DEFAULT_SETTINGS)
+    if s.get("document") == "receipt":
+        merged.update(RECEIPT_PRESET)
+        # レシートの見た目を変える設定は受け付けない
+        for k in ("layout", "enhance", "dewarp", "margins", "dedupe"):
+            s.pop(k, None)
+    merged.update(s)
+    return merged
 
 
 class ProjectError(RuntimeError):
@@ -90,8 +118,7 @@ class Project:
         root.mkdir(parents=True, exist_ok=True)
         for d in DIRS.values():
             (root / d).mkdir(exist_ok=True)
-        merged = dict(DEFAULT_SETTINGS)
-        merged.update({k: v for k, v in (settings or {}).items() if v is not None})
+        merged = with_preset(settings)
         data = {
             "schema_version": SCHEMA_VERSION,
             "project_id": uuid.uuid4().hex,

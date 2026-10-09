@@ -500,9 +500,11 @@ def split_spread(
             warnings.append("page_touches_frame")
         if enhance == "normalize":
             page = normalize_illumination(page)
-        if margins == "content_box":
-            page, box, hand = clean_margins(page, outside)
+        if margins in ("content_box", "detect"):
+            cleaned, box, hand = clean_margins(page, outside)
             geo.setdefault("content_box", {})[side] = box
+            if margins == "content_box":
+                page = cleaned
             if hand:
                 warnings.append("hand_in_content")
         warnings += page_checks(crop, gutter_side)

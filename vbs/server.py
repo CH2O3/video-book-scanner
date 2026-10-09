@@ -25,7 +25,7 @@ from typing import Any
 
 import cv2
 
-from vbs import __version__, pipeline
+from vbs import __version__, pipeline, receipt
 from vbs.manifest import DEFAULT_SETTINGS, Project, ProjectError, atomic_write_json
 from vbs.ocr import OcrError
 from vbs.video import VideoError
@@ -35,7 +35,8 @@ APP_DIR = Path.home() / ".vbs"
 RECENT = APP_DIR / "recent.json"
 EDITABLE_SETTINGS = {"layout", "direction", "expected_pages", "page_height_mm", "ocr_lang", "ocr_psm",
                      "ocr_scale", "auto_export", "min_still_sec", "motion_threshold", "enhance",
-                     "content_rotation", "dewarp", "margins", "candidate_still_both_ways"}
+                     "content_rotation", "dewarp", "margins", "candidate_still_both_ways",
+                     "document", "receipt_width_mm"}
 USER_ERRORS = (ProjectError, VideoError, OcrError, ValueError, KeyError)
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv"}
 PHOTO_EXT = {".jpg", ".jpeg", ".png"}
@@ -55,7 +56,9 @@ def _coerce(key: str, v: Any) -> Any:
         return v if isinstance(v, bool) else str(v).lower() in ("true", "1", "yes")
     if key in ("ocr_psm", "expected_pages"):
         return int(v)
-    if key in ("page_height_mm", "min_still_sec", "motion_threshold"):
+    if key == "document" and v not in ("book", "receipt"):
+        raise ValueError("document は book か receipt です。")
+    if key in ("page_height_mm", "min_still_sec", "motion_threshold", "receipt_width_mm"):
         return float(v)
     if key == "content_rotation":
         return "auto" if v == "auto" else int(v) % 360
@@ -166,6 +169,9 @@ class App:
             "pending": pipeline.pending_pages(p),
             "page_options": {s["id"]: {k: pipeline.page_option(p, s, k) for k in pipeline.PAGE_OPTION_DEFAULTS}
                              for s in p.data["segments"]},
+            "receipts": ({pid: pipeline.receipt_fields(p, pg) for pid, pg in p.data["pages"].items()}
+                         if pipeline.is_receipt(p) else None),
+            "receipt_labels": receipt.FIELD_LABELS,
         }
         self.snapshot = json.dumps(state, ensure_ascii=False)
 
@@ -311,6 +317,10 @@ class App:
                     p.settings[k] = _coerce(k, v)
             elif op == "rotate_video":
                 pipeline.rotate_video_frames(p, body["video"], int(body["k"]))
+            elif op == "sort_receipts":
+                pipeline.sort_receipts(p, str(body.get("by")))
+            elif op == "receipt_fields":
+                pipeline.set_receipt_fields(p, body["page"], body.get("values") or {})
             elif op == "title":
                 p.data["title"] = str(body["title"]).strip() or None
             else:
@@ -469,6 +479,8 @@ def make_handler(app: App, port_ref: list[int]):
             try:
                 if path == "/api/upload":
                     return self._upload(qs)
+                if path == "/api/receipts_import":
+                    return self._receipts_import()
                 body = self._body_json()
                 if path == "/api/action":
                     app.action(body)
@@ -544,6 +556,37 @@ def make_handler(app: App, port_ref: list[int]):
                 # 動画は成功時に videos/ 内で改名済み。失敗時と写真の一時ファイルはここで消す
                 tmp.unlink(missing_ok=True)
             self._send(200, app.snapshot.encode("utf-8"), "application/json; charset=utf-8")
+
+        def _receipts_import(self) -> None:
+            """直したレシートの一覧（CSV）を取り込む."""
+            from vbs.receipt_export import import_csv
+
+            p = app.project
+            if p is None:
+                return self._err("プロジェクトが開かれていません。")
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 20 * 1024 * 1024:
+                return self._err("一覧のファイルが大きすぎます。")
+            raw = self.rfile.read(n)
+            for enc in ("utf-8-sig", "cp932"):
+                try:
+                    text = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                return self._err("一覧の文字コードを読めません（UTF-8 か Shift_JIS で保存してください）。")
+            try:
+                with app.lock:
+                    if app.job.get("running"):
+                        return self._err("処理中は読み込めません。")
+                    res = import_csv(p, text)
+                    app.refresh()
+            except USER_ERRORS as e:
+                return self._err(str(e))
+            state = json.loads(app.snapshot)
+            state["import_result"] = res
+            self._json(state)
 
         def _reveal(self, what: str) -> None:
             p = app.project

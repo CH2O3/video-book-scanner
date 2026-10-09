@@ -50,7 +50,7 @@ WARNINGS: dict[str, tuple[str, bool]] = {
     "frame_missing": ("候補フレームを取り出せない", True),
     "no_candidate": ("候補なし", True),
     "short_still": ("静止が短い", True),
-    "duplicate_suspect": ("重複の疑い（白紙など）", True),
+    "duplicate_suspect": ("重複の疑い（同じものを続けて撮った、または白紙など）", True),
     "unreadable": ("解析できない区間", True),
     "ocr_failed": ("OCR失敗", True),
     "ocr_low_conf": ("OCRの信頼度が低い", True),
@@ -62,6 +62,17 @@ WARNINGS: dict[str, tuple[str, bool]] = {
     "hdr_hlg": ("HLG方式のHDR（SDRとして処理）", False),
     "duplicate": ("重複候補として統合", False),
     "blank_page": ("白紙ページ", False),
+    "no_paper": ("紙が写っていない（何も置いていない場面）", False),
+    "receipt_hand": ("手で押さえたまま（よいフレームがない）", False),
+    "receipt_blur": ("ぶれている（よいフレームがない）", False),
+    "low_resolution": ("解像度が200dpi相当に届かない（電子帳簿保存法の目安）", True),
+    "receipt_no_date": ("取引日を読み取れない", True),
+    "receipt_no_total": ("金額を読み取れない", True),
+    "receipt_no_payee": ("取引先を読み取れない", True),
+    "receipt_regno_suspect": ("登録番号の検査用の数字が合わない（読み誤りの疑い）", True),
+    "receipt_total_disagree": ("金額の読み直しで結果が分かれた", True),
+    "receipt_date_disagree": ("取引日の読み直しで結果が分かれた", True),
+    "receipt_amount_mismatch": ("税率ごとの対象額の合計が金額と合わない（読み誤りの疑い）", True),
 }
 
 
@@ -206,6 +217,8 @@ def _revision(project: Project, seg: dict[str, Any]) -> str:
         "rotation_rev": seg.get("rotation_rev", 0),
         "split_version": SPLIT_VERSION,
     }
+    if st.get("document") == "receipt":  # 本の既存プロジェクトの revision は変えない
+        key["receipt_width_mm"] = st.get("receipt_width_mm")
     return hashlib.sha1(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -217,7 +230,18 @@ def page_option(project: Project, seg: dict[str, Any], key: str) -> str:
     return (seg.get("page_options") or {}).get(key) or project.settings.get(key, PAGE_OPTION_DEFAULTS[key])
 
 
-def _page_dpi(project: Project, height_px: int) -> int:
+def is_receipt(project: Project) -> bool:
+    return project.settings.get("document") == "receipt"
+
+
+RECEIPT_MIN_DPI = 200  # 電子帳簿保存法のスキャナ保存で示されている解像度の目安
+
+
+def _page_dpi(project: Project, height_px: int, width_px: int | None = None) -> int:
+    """PDF上の寸法を決める解像度。本は紙の高さ、レシートは幅（58mm・80mmなど）から求める."""
+    if is_receipt(project) and width_px:
+        mm = float(project.settings.get("receipt_width_mm") or 80.0)
+        return max(72, int(round(width_px / (mm / 25.4))))
     mm = float(project.settings["page_height_mm"])
     return max(72, int(round(height_px / (mm / 25.4))))
 
@@ -247,7 +271,9 @@ def process_pages(project: Project, progress: ProgressFn = _noop) -> int:
             pid = f"{seg['id']}-{side}"
             sides.append(pid)
             path = project.path("pages", f"{pid}.jpg")
-            dpi = _page_dpi(project, page_img.shape[0]) if page_img.size else 72
+            dpi = _page_dpi(project, page_img.shape[0], page_img.shape[1]) if page_img.size else 72
+            if is_receipt(project) and page_img.size and dpi < RECEIPT_MIN_DPI:
+                warnings = warnings + ["low_resolution"]
             pitch = None
             if page_img.size:
                 imwrite(path, page_img, quality=92, dpi=dpi)
@@ -448,6 +474,133 @@ def ocr_warnings(p: dict[str, Any]) -> list[str]:
     return []
 
 
+# ---------------------------------------------------------------- レシート
+def read_receipts(project: Project, progress: ProgressFn = _noop) -> int:
+    """OCRの結果からレシートの項目を読み取る。OCRが変わったページだけ読み直す（手修正は残す）."""
+    from vbs import receipt
+
+    targets = [p for p in active_pages(project) if (p.get("ocr") or {}).get("txt")]
+    done = 0
+    for n, p in enumerate(targets):
+        o = p["ocr"]
+        rec = p.get("receipt") or {}
+        if (rec.get("auto") or {}).get("ocr_key") == o.get("key"):
+            continue
+        try:
+            text = project.abs(o["txt"]).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        res = receipt.parse(text)
+        if o.get("tsv"):
+            # 金額の行は、数字だけで読み直した結果を使う（日本語のモデルは細い数字を読み違えやすい）
+            import subprocess
+
+            from vbs.receipt_ocr import augmented_text
+
+            try:
+                aug, notes = augmented_text(project.abs(p["image"]), project.abs(o["tsv"]),
+                                            float(o.get("used_scale") or 1.0))
+            except (OSError, subprocess.SubprocessError):
+                aug, notes = None, {}
+            if aug is not None:
+                res2 = receipt.parse(aug)
+                first = res["fields"].get("total")
+                for k in ("total", "base10", "base8", "tax"):
+                    res["fields"][k] = res2["fields"][k]
+                    res["evidence"][k] = res2["evidence"][k]
+                res["checks"] = receipt.checks(res["fields"])
+                res["reread"] = notes
+                if first is not None and res["fields"]["total"] is not None and first != res["fields"]["total"]:
+                    res["total_disagree"] = [first, res["fields"]["total"]]
+            # 日付は、その行だけを拡大して読み直し、食い違えば確認へ回す
+            if res["fields"].get("date") and res["evidence"].get("date"):
+                from vbs.receipt_ocr import reread_line
+
+                try:
+                    again = reread_line(project.abs(p["image"]), project.abs(o["tsv"]),
+                                        float(o.get("used_scale") or 1.0), res["evidence"]["date"])
+                except (OSError, subprocess.SubprocessError):
+                    again = None
+                d2 = receipt.find_date([receipt.normalize(again)])[0] if again else None
+                res["date_reread"] = again
+                if d2 != res["fields"]["date"]:
+                    res["date_disagree"] = [res["fields"]["date"], d2]
+        rec["auto"] = {**res, "ocr_key": o.get("key"), "time": now_iso()}
+        p["receipt"] = rec
+        done += 1
+        progress("ocr", (n + 1) / max(1, len(targets)), f"レシートの項目を読み取り {n + 1}/{len(targets)}")
+    project.save()
+    return done
+
+
+def receipt_fields(project: Project, p: dict[str, Any]) -> dict[str, Any]:
+    from vbs import receipt
+
+    return receipt.merged(p.get("receipt"))
+
+
+def receipt_warnings(project: Project, p: dict[str, Any]) -> list[str]:
+    if not is_receipt(project) or not (p.get("receipt") or {}).get("auto"):
+        return []
+    from vbs import receipt
+
+    codes = receipt.missing(receipt_fields(project, p))
+    rec = p["receipt"]
+    if rec["auto"].get("total_disagree") and "total" not in (rec.get("manual") or {}):
+        codes.append("receipt_total_disagree")
+    if rec["auto"].get("date_disagree") and "date" not in (rec.get("manual") or {}):
+        codes.append("receipt_date_disagree")
+    return codes
+
+
+def set_receipt_fields(project: Project, page_id: str, values: dict[str, Any], source: str = "manual") -> None:
+    """レシートの項目を手で直す。空にした項目は自動の値に戻す."""
+    from vbs import receipt
+
+    p = project.data["pages"][page_id]
+    rec = p.setdefault("receipt", {})
+    manual = dict(rec.get("manual") or {})
+    for k, v in values.items():
+        if k not in receipt.FIELDS:
+            raise ProjectError(f"変更できない項目です: {k}")
+        val = receipt.coerce(k, v)
+        auto = ((rec.get("auto") or {}).get("fields") or {}).get(k)
+        if val is None or val == auto:
+            manual.pop(k, None)
+        else:
+            manual[k] = val
+    rec["manual"] = manual
+    rec["manual_source"] = source if manual else None
+    rec["manual_time"] = now_iso()
+    project.save()
+
+
+def sort_receipts(project: Project, by: str) -> None:
+    """レシートを取引日・取引先の順に並べ替える（いま有効な値＝手修正やAIの修正を反映した値で）.
+
+    読み取れていない項目のレシートは最後に、撮影順のまま並べる。
+    """
+    if by not in ("date", "payee", "payee_date", "shot"):
+        raise ProjectError(f"並べ方が不明です: {by}")
+    if by == "shot":
+        project.data["receipt_sort"] = "shot"
+        reset_order(project)
+        return
+    order = natural_order(project)
+    pages = project.data["pages"]
+    pos = {pid: i for i, pid in enumerate(order)}
+
+    def key(pid: str):
+        f = receipt_fields(project, pages[pid])
+        d, py = f.get("date"), (f.get("payee") or "").replace(" ", "")
+        if by == "date":
+            return (d is None, d or "", pos[pid])
+        return (not py, py, d is None, d or "", pos[pid])
+
+    set_order(project, sorted(order, key=key))
+    project.data["receipt_sort"] = by
+
+
 # ---------------------------------------------------------------- 順序と確認
 def natural_order(project: Project) -> list[str]:
     vorder = {v["id"]: i for i, v in enumerate(project.data["videos"])}
@@ -489,6 +642,8 @@ def review_items(project: Project) -> list[dict[str, Any]]:
     for s in project.data["segments"]:
         if s.get("duplicate_of"):
             continue  # 統合済みの重複は区間タブで確認できる。出力を止める理由にはしない
+        if "no_paper" in s["warnings"]:
+            continue  # 何も置いていない場面（レシート）
         ack = set(s.get("acknowledged", []))
         codes = [w for w in s["warnings"] if is_blocking(w) and w not in ack]
         # 採用区間のぼけ等はページ側でも見るが、区間側の理由も残す
@@ -499,7 +654,8 @@ def review_items(project: Project) -> list[dict[str, Any]]:
     for pid in project.data["order"]:
         p = project.data["pages"][pid]
         ack = set(p.get("acknowledged", []))
-        codes = [w for w in p["warnings"] + ocr_warnings(p) if is_blocking(w) and w not in ack]
+        codes = [w for w in p["warnings"] + ocr_warnings(p) + receipt_warnings(project, p)
+                 if is_blocking(w) and w not in ack]
         # 区間単位の警告はページに重複表示しない
         codes = [c for c in dict.fromkeys(codes)]
         if codes:
@@ -538,7 +694,7 @@ def export_pdf(project: Project, out: Path | None = None, force: bool = False,
         else:
             raise ProjectError(f"{pid} はOCRに失敗しています。画像だけで残すか、ページを修正してください。")
     ensure_free_space(project)
-    name = project.data.get("title") or "book"
+    name = project.data.get("title") or ("receipts" if is_receipt(project) else "book")
     out = Path(out or project.path("output", f"{_safe(name)}.pdf"))
     # 一時ファイルに作って検証してから置き換える。失敗しても既存の正常なPDFは残る
     staged = out.with_name(out.stem + ".new.pdf")
@@ -557,12 +713,18 @@ def export_pdf(project: Project, out: Path | None = None, force: bool = False,
                            f"新しいPDFは {staged} にあります。") from e
     ver["pdf"] = str(out.resolve())
     ver_path = write_report(ver, out)
+    receipt_files = None
+    if is_receipt(project):
+        from vbs.receipt_export import write_package
+
+        receipt_files = write_package(project, list(order), Path(out).resolve())
     rec = {"time": now_iso(), "path": str(Path(out).resolve()), "pages": n, "forced": bool(items) and force,
            "image_only_pages": image_only,
            "unresolved": len(items), "revisions": {pid: project.data["pages"][pid]["revision"] for pid in order},
            "order": list(order), "sha256": ver["sha256"], "verify": str(ver_path.resolve()),
            "verify_summary": {"pages": ver["pages"], "page_count_ok": ver["page_count_ok"],
-                              "terms": ver.get("terms_summary")}}
+                              "terms": ver.get("terms_summary")},
+           "receipt_files": receipt_files}
     project.data["exports"].append(rec)
     project.save()
     return rec
@@ -582,6 +744,8 @@ def run_all(project: Project, progress: ProgressFn = _noop, export: bool | None 
     if ocr:
         ensure_free_space(project)
         run_ocr(project, progress, workers=workers)
+        if is_receipt(project):
+            read_receipts(project, progress)
     update_order(project)
     project.save()
     items = review_items(project)
@@ -656,6 +820,16 @@ def add_photo(project: Project, image_path: Path, after_segment_id: str | None,
               original_name: str | None = None) -> dict[str, Any]:
     """写真（JPEG/PNG）で欠落ページを補う。指定区間の直後に並ぶ（P0: 欠落ページの補充）."""
     bgr = imread(image_path)
+    rotation = None
+    if project.settings.get("content_rotation", "auto") == "auto":
+        from vbs.orient import MIN_CONF, detect_osd
+
+        r = detect_osd(bgr)
+        if r and r[1] >= MIN_CONF and r[0]:
+            import numpy as _np
+
+            bgr = _np.ascontiguousarray(_np.rot90(bgr, r[0]))
+        rotation = {"k": r[0] if r and r[1] >= MIN_CONF else 0, "conf": r[1] if r else None}
     if after_segment_id:
         prev = project.segment(after_segment_id)
         video_id, t = prev["video_id"], prev["end_sec"] + 1e-3
@@ -666,7 +840,8 @@ def add_photo(project: Project, image_path: Path, after_segment_id: str | None,
         photos = [s["start_sec"] for s in project.data["segments"] if s.get("video_id") is None]
         video_id, t = None, (max(photos) + 1.0 if photos else 0.0)
     fid = _save_frame(project, bgr, {"video_id": None, "pts": None, "time_sec": None, "source": "photo",
-                                     "original_name": original_name or Path(image_path).name})
+                                     "original_name": original_name or Path(image_path).name,
+                                     "content_rotation": rotation})
     seg = _new_segment(project, video_id, t, t)
     seg["candidates"] = [fid]
     seg["chosen"] = fid

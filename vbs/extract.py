@@ -349,7 +349,8 @@ def _ckpt_key(project, video: dict[str, Any]) -> str:
     st = project.settings
     key = {"v": EXTRACT_VERSION, "sha": video["sha256"],
            **{k: st.get(k) for k in ("analysis_width", "motion_threshold", "min_still_sec", "max_candidates",
-                                     "candidate_format", "content_rotation", "candidate_still_both_ways")}}
+                                     "candidate_format", "content_rotation", "candidate_still_both_ways",
+                                     "document")}}
     return json.dumps(key, sort_keys=True)
 
 
@@ -385,11 +386,18 @@ def extract_video(project, video: dict[str, Any], progress: ProgressFn | None = 
         checkpoint=p1,
         checkpoint_key=key,
     )
-    runs = find_still_runs(a, float(st["min_still_sec"]))
-    both_ways = bool(st.get("candidate_still_both_ways", False))
-    fwd = forward_motion(a) if both_ways else None
-    plan: list[tuple[dict, list[int]]] = [
-        (r, pick_candidates(a, r["i0"], r["i1"], int(st["max_candidates"]), both_ways, fwd)) for r in runs]
+    if st.get("document") == "receipt":
+        # レシートは手持ちで撮ることが多く、画面全体が止まらない。紙ごとに良いフレームを選ぶ
+        from vbs.receipt_shots import plan_receipt_shots
+
+        plan: list[tuple[dict, list[int]]] = plan_receipt_shots(
+            vpath, a, (lambda f, m: progress(f, m)) if progress else None)
+    else:
+        runs = find_still_runs(a, float(st["min_still_sec"]))
+        both_ways = bool(st.get("candidate_still_both_ways", False))
+        fwd = forward_motion(a) if both_ways else None
+        plan = [(r, pick_candidates(a, r["i0"], r["i1"], int(st["max_candidates"]), both_ways, fwd))
+                for r in runs]
     ext = "png" if st.get("candidate_format") == "png" else "jpg"
     n_frames = len(a.times)
     sharp_ref = float(np.median([a.sharp[ks[0]] for _, ks in plan if ks])) if plan else 0.0
@@ -479,6 +487,8 @@ def extract_video(project, video: dict[str, Any], progress: ProgressFn | None = 
             warnings.append("no_candidate")
         if r["short"]:
             warnings.append("short_still")
+        if r.get("exclude_reason"):
+            warnings.append(r["exclude_reason"])
         if cand_ids and sharp_ref > 0 and a.sharp[ks[0]] < 0.35 * sharp_ref:
             warnings.append("blur")
         flags = (["video_start"] if r["i0"] == 0 else []) + (["video_end"] if r["i1"] == n_frames - 1 else [])
@@ -492,7 +502,7 @@ def extract_video(project, video: dict[str, Any], progress: ProgressFn | None = 
             "chosen": cand_ids[0] if cand_ids else None,
             # 途中の短い静止はめくりの途中のことが多いので採用しない（一覧には残す）。
             # 動画の冒頭・末尾は前後にめくりがないので、短くても確認付きで採用する（EXT-03）
-            "include": bool(cand_ids) and (not r["short"] or at_edge),
+            "include": bool(cand_ids) and (not r["short"] or at_edge) and not r.get("exclude_reason"),
             "manual": False,
             "duplicate_of": None,
             "warnings": warnings,
@@ -501,8 +511,13 @@ def extract_video(project, video: dict[str, Any], progress: ProgressFn | None = 
         segs.append(seg)
         # 重複判定は直前の区間とだけ比べるので、特徴量は1区間分だけ持つ
         feat = _features_of(project, frames, seg) if cand_ids else None
-        if feat is not None:
-            prev, prev_feat = _dedupe_step(segs, prev, prev_feat, len(segs) - 1, feat)
+        if feat is not None and st.get("document") == "receipt" and len(feat[0]) < MIN_KEYPOINTS:
+            # レシートの置き換えの間に、何も置いていない机が止まって写った区間
+            seg["include"] = False
+            seg["warnings"].append("no_paper")
+        elif feat is not None:
+            prev, prev_feat = _dedupe_step(segs, prev, prev_feat, len(segs) - 1, feat,
+                                           merge=st.get("dedupe", "merge") != "flag")
         state.update(done=idx + 1, next_ids=dict(project.data["next_ids"]), prev=prev)
         atomic_write_json(p2, state)
         faults.point("extract.pass2.segment")
@@ -528,7 +543,7 @@ def extract_video(project, video: dict[str, Any], progress: ProgressFn | None = 
         "frames": int(n_frames),
         "threshold": round(a.threshold, 3),
         "motion_p30": round(float(np.percentile(a.motion, 30)), 3) if a.motion.size else None,
-        "still_runs": len(runs),
+        "still_runs": len(plan),
         "error": a.error,
     }
     return {"segments": len(new_segments), "frames": len(frames), "error": a.error}
@@ -544,12 +559,14 @@ def _features_of(project, frames: dict[str, dict], seg: dict) -> tuple | None:
     return _features(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
 
-def _dedupe_step(segs: list[dict], prev: int | None, prev_feat, i: int, feat) -> tuple[int, Any]:
+def _dedupe_step(segs: list[dict], prev: int | None, prev_feat, i: int, feat,
+                 merge: bool = True) -> tuple[int, Any]:
     """直前の区間と同じ見開きなら重複としてまとめる（EXT-05）。参照は duplicate_of で残す.
 
     特徴点の対応を射影変換で検証した数（インライア）で判定する。手の映り込みや
     本の位置ずれに強い。実写サンプルでは同じ見開き 485〜673、別の見開き 6〜18 だった。
     特徴点が少ない（白紙に近い）画像同士は判断せず、確認へ回す。
+    merge=False（レシート）では、同じ店の別のレシートを取り違えないよう、まとめずに確認へ回す。
     戻り値は次に比べる区間とその特徴量。
     """
     seg = segs[i]
@@ -557,6 +574,8 @@ def _dedupe_step(segs: list[dict], prev: int | None, prev_feat, i: int, feat) ->
         n_in, n_kp = _inliers(prev_feat, feat)
         seg["match_prev"] = {"segment": segs[prev]["id"], "inliers": n_in, "keypoints": n_kp}
         if n_kp < MIN_KEYPOINTS:
+            seg["warnings"].append("duplicate_suspect")
+        elif n_in >= DUP_INLIERS and not merge:
             seg["warnings"].append("duplicate_suspect")
         elif n_in >= DUP_INLIERS:
             # 静止時間の長い方を採用する（短い方はめくり直前・直後の可能性が高い）
