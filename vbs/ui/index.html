@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Book Scanner</title>
+<style>
+:root {
+  --bg: #f4f3f0; --panel: #ffffff; --ink: #1f2328; --muted: #6b7178; --line: #dcd9d2;
+  --accent: #2f6fdf; --accent-ink: #fff; --accent-soft: #e6eefc;
+  --warn: #9a4a06; --warn-bg: #fff1df; --ok: #1d7a46; --ok-bg: #e4f4ea; --bad: #b42318; --bad-bg: #fdecea;
+  --chip: #eceae5; --sel: #2f6fdf; --shade: rgba(0,0,0,.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181b; --panel: #1f2226; --ink: #e8e6e3; --muted: #9aa0a6; --line: #33373e;
+    --accent: #5b8ff0; --accent-soft: #233150; --warn: #f0a35a; --warn-bg: #3a2a18; --ok: #5fcf8e; --ok-bg: #173226;
+    --bad: #f28b82; --bad-bg: #3b1d1b; --chip: #2b2f35; --sel: #7aa5ff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; display: flex; flex-direction: column; }
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header .brand { font-weight: 700; }
+header .title { font-weight: 600; border: 1px solid transparent; background: transparent; color: inherit; padding: 2px 6px; border-radius: 6px; min-width: 10em; font: inherit; }
+header .title:hover, header .title:focus { border-color: var(--line); outline: none; }
+.steps { display: flex; gap: 4px; flex-wrap: wrap; }
+.steps button { border-radius: 999px; }
+.steps button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.steps .n { display: inline-block; min-width: 1.4em; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-size: 12px; }
+.steps button.active .n { background: rgba(255,255,255,.25); color: inherit; }
+.spacer { flex: 1; }
+button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 6px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.big { padding: 10px 22px; font-size: 16px; }
+button.small { padding: 3px 8px; font-size: 12px; }
+button.on { background: var(--accent-soft); border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { background: var(--chip); border-radius: 999px; padding: 1px 10px; font-size: 12px; white-space: nowrap; }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+main { flex: 1; min-height: 0; overflow: auto; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 20px 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.panel h2 { margin: 0 0 10px; font-size: 16px; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+input[type=text], input[type=number], select { font: inherit; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+input.wide { width: 100%; }
+.drop { border: 2px dashed var(--line); border-radius: 14px; padding: 30px 16px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.drop strong { display: block; font-size: 17px; color: var(--ink); margin-bottom: 4px; }
+.filelist { margin: 10px 0 0; padding: 0; list-style: none; }
+.filelist li { display: flex; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+details > summary { cursor: pointer; color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 10px; }
+.err { background: var(--bad-bg); color: var(--bad); padding: 10px 14px; border-radius: 10px; margin: 10px 0; white-space: pre-wrap; }
+.note { background: var(--ok-bg); color: var(--ok); padding: 10px 14px; border-radius: 10px; margin: 10px 0; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+#toast > div { background: #222; color: #fff; padding: 8px 14px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.stages { display: flex; gap: 6px; margin: 10px 0 16px; flex-wrap: wrap; }
+.stage { flex: 1; min-width: 110px; padding: 8px 10px; border-radius: 10px; background: var(--chip); color: var(--muted); font-size: 13px; }
+.stage.done { background: var(--ok-bg); color: var(--ok); }
+.stage.now { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.bar { height: 10px; background: var(--chip); border-radius: 5px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+.stat { background: var(--chip); border-radius: 10px; padding: 10px; text-align: center; }
+.stat b { display: block; font-size: 22px; }
+.review { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+.side { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+.side .filters { padding: 8px; display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.list { overflow: auto; padding: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-content: start; flex: 1; }
+.item { border: 2px solid transparent; border-radius: 8px; cursor: pointer; background: var(--chip); position: relative; }
+.item img { width: 100%; display: block; border-radius: 6px; aspect-ratio: 3 / 4; object-fit: contain; background: #fff; }
+.item.spread img { aspect-ratio: 16 / 10; }
+.item.sel { border-color: var(--sel); }
+.item .cap { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.item .flag { position: absolute; right: 4px; top: 4px; background: var(--warn); color: #fff; font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.item .pend { position: absolute; right: 4px; bottom: 4px; background: var(--accent); color: #fff; font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.item.excluded { opacity: .45; }
+.item.drag-over { outline: 2px dashed var(--accent); }
+.detail { overflow: auto; padding: 14px 18px; min-width: 0; }
+.dhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.dhead h2 { margin: 0; font-size: 17px; }
+.viewer { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
+.stagebox { background: var(--chip); border-radius: 10px; min-height: 300px; display: flex; align-items: center; justify-content: center; overflow: auto; max-height: calc(100vh - 230px); }
+.stagebox img { max-width: 100%; max-height: calc(100vh - 240px); display: block; cursor: zoom-in; }
+.stagebox.zoom { align-items: flex-start; justify-content: flex-start; }
+.stagebox.zoom img { max-width: none; max-height: none; cursor: zoom-out; }
+.tools { display: flex; flex-direction: column; gap: 8px; }
+.tools h3 { margin: 6px 0 2px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
+.cand { border: 2px solid transparent; border-radius: 8px; cursor: pointer; background: var(--chip); position: relative; }
+.cand img { width: 100%; display: block; border-radius: 6px; }
+.cand.cur { border-color: var(--ok); }
+.cand.sel { border-color: var(--sel); }
+.cand .cap { position: absolute; left: 4px; bottom: 4px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.banner { background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; font-size: 13px; }
+.modal-bg { position: fixed; inset: 0; background: var(--shade); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.modal { background: var(--panel); border-radius: 12px; padding: 16px; max-width: min(1300px, 100%); max-height: 100%; overflow: auto; width: 100%; }
+.modal h2 { margin: 0 0 8px; font-size: 16px; }
+.geo-wrap { position: relative; display: inline-block; max-width: 100%; user-select: none; }
+.geo-wrap img { max-width: 100%; max-height: 68vh; display: block; }
+.geo-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+@media (max-width: 900px) { .review { grid-template-columns: 1fr; } .side { max-height: 40vh; } .viewer { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header id="hdr"></header>
+<main id="main"></main>
+<div id="modal"></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+let S = null, JOB = { running: false }, HOME = { recent: [], default_dir: "" };
+let SCREEN = "input";
+let FILTER = "review";
+let SEL = null;              // { kind: "page" | "segment", id }
+let VIEW = "final";          // final | plain | frame
+let PREVIEW_FRAME = null;    // 候補を試しに大きく表示しているときのフレームID
+let REORDER = false;
+let pollTimer = null;
+const pending = { files: [], paths: [] };   // 開始前に選んだ動画・写真
+
+// ---------------------------------------------------------------- 小道具
+const $ = (s, el = document) => el.querySelector(s);
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "class") e.className = v;
+    else if (k === "style") e.style.cssText = v;
+    else if (k === "value") e.value = v;
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(3)) if (kid !== null && kid !== undefined && kid !== false)
+    e.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return e;
+}
+const put = (el, ...kids) => el.replaceChildren(...kids.flat(3).filter(k => k !== null && k !== undefined && k !== false));
+const q = (o) => new URLSearchParams({ ...o, t: TOKEN }).toString();
+const fileUrl = (rel, bust = "") => `/files/${rel.split("/").map(encodeURIComponent).join("/")}?${q({ v: bust })}`;
+const fmtT = (s) => s == null ? "-" : `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, "0")}`;
+function toast(msg, ms = 3500) {
+  const d = h("div", {}, msg); $("#toast").append(d); setTimeout(() => d.remove(), ms);
+}
+async function api(path, body, opts = {}) {
+  const r = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Token": TOKEN, ...(opts.raw ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : (opts.raw ? body : JSON.stringify(body)),
+  });
+  const txt = await r.text();
+  let data = null; try { data = JSON.parse(txt); } catch { data = null; }
+  if (!r.ok) { const e = new Error((data && data.error) || `HTTP ${r.status}`); e.actions = data && data.actions; throw e; }
+  return data;
+}
+async function act(body, okMsg) {
+  try { S = await api("/api/action", body); if (okMsg) toast(okMsg); render(); return true; }
+  catch (e) { showError(e); return false; }
+}
+function showError(e) {
+  modal(h("div", {}, h("h2", {}, "うまくいきませんでした"), h("div", { class: "err" }, String(e.message || e)),
+    h("div", { class: "row" }, (e.actions || []).map(a => actionButton(a)), h("div", { class: "spacer" }),
+      h("button", { onclick: closeModal }, "閉じる"))));
+}
+function actionButton(a) {
+  return h("button", { class: "primary", onclick: () => { closeModal(); doAction(a.action); } }, a.label);
+}
+function doAction(name) {
+  if (name === "resume") runPipeline();
+  else if (name === "goto_input") go("input");
+  else if (name === "goto_review") go("review");
+  else if (name === "export") exportPdf();
+  else if (name === "allow_hdr") runPipeline({ allow_hdr: true });
+}
+
+// ---------------------------------------------------------------- 状態
+async function load() {
+  try {
+    HOME = await api("/api/home");
+    S = await api("/api/state");
+    JOB = await api("/api/job");
+    if (S.project) SCREEN = JOB.running ? "progress" : S.project.order.length ? "review" : S.project.videos.length ? "progress" : "input";
+    render();
+    if (JOB.running) startPoll();
+  } catch (e) { render(); showError(e); }
+}
+function go(screen) { SCREEN = screen; render(); }
+function startPoll() {
+  if (pollTimer) return;
+  let n = 0;
+  pollTimer = setInterval(async () => {
+    try {
+      JOB = await api("/api/job");
+      if (++n % 2 === 0 || !JOB.running) S = await api("/api/state");
+      if (!JOB.running || !softUpdate()) render();
+      if (!JOB.running) {
+        clearInterval(pollTimer); pollTimer = null;
+        const exp = JOB.result && JOB.result.export;
+        if (exp && exp.path) exportDone(exp);
+        else if (!JOB.error && !JOB.cancelled && SCREEN === "progress" && JOB.kind !== "export") {
+          // 終わったら確認画面へ（要確認があればそこから）
+          FILTER = S.review.length ? "review" : "all"; SEL = null; go("review");
+        }
+      }
+    } catch (e) { /* 一時的な失敗は次回に */ }
+  }, 800);
+}
+// 処理中は、画面の作りが変わらない限り数字だけ書き換える（押しかけたボタンや入力中の書名を作り直さない）
+let LAST_KEY = "";
+function structureKey() {
+  return JSON.stringify([SCREEN, JOB.running, JOB.stage, JOB.cancelled, JOB.error, S && S.project && S.project.exports.length]);
+}
+function softUpdate() {
+  const key = structureKey();
+  if (key !== LAST_KEY) return false;
+  const P = S.project, sm = S.summary;
+  const pct = `${Math.round((JOB.frac || 0) * 100)}%`;
+  const elapsed = JOB.started ? Math.round(Date.now() / 1000 - JOB.started) : 0;
+  const vals = { pct, bar: pct, msg: JOB.msg || "", elapsed: `経過 ${Math.floor(elapsed / 60)}分${elapsed % 60}秒`,
+    spreads: P.segments.filter(s => s.include && s.chosen).length, pages: sm.pages, ocr: sm.ocr_done, review: S.review.length };
+  for (const el of document.querySelectorAll("[data-live]")) {
+    const k = el.dataset.live;
+    if (k === "bar") el.style.width = vals.bar; else if (k in vals) el.textContent = vals[k];
+  }
+  return true;
+}
+async function runPipeline(extra = {}) {
+  try { await api("/api/run", { export: false, ...extra }); JOB = { running: true, msg: "開始", stage: "" }; go("progress"); startPoll(); }
+  catch (e) { showError(e); }
+}
+async function cancelJob() { try { await api("/api/cancel", {}); toast("中断しています…（処理中のページが終わり次第止まります）"); } catch (e) { showError(e); } }
+
+// ---------------------------------------------------------------- ヘッダー
+function renderHeader() {
+  const P = S && S.project;
+  const nReview = P ? S.review.length : 0;
+  put($("#hdr"),
+    h("span", { class: "brand" }, "📖 Video Book Scanner"),
+    P ? h("input", { class: "title", type: "text", value: P.title || "", placeholder: "書名（PDFの名前）",
+      onchange: (e) => act({ op: "title", title: e.target.value }) }) : null,
+    h("div", { class: "steps" },
+      h("button", { class: SCREEN === "input" ? "active" : "", onclick: () => go("input") }, "1 動画を入れる"),
+      h("button", { class: SCREEN === "progress" ? "active" : "", disabled: !P, onclick: () => go("progress") },
+        "2 処理状況", JOB.running ? h("span", { class: "n", "data-live": "pct" }, `${Math.round((JOB.frac || 0) * 100)}%`) : null),
+      h("button", { class: SCREEN === "review" ? "active" : "", disabled: !P || !P.segments.length, onclick: () => go("review") },
+        "3 確認してPDFにする", nReview ? h("span", { class: "n" }, nReview) : null)),
+    h("div", { class: "spacer" }),
+    P ? h("button", { class: "small", title: S.root, onclick: () => api("/api/reveal", { what: "root" }).catch(showError) }, "保存先を開く") : null,
+    P ? h("button", { class: "small", disabled: JOB.running, onclick: () => { S = { project: null }; SEL = null; go("input"); } }, "別の本") : null);
+}
+
+function render() {
+  renderHeader();
+  const P = S && S.project;
+  const view = !P ? viewInput : { input: viewInput, progress: viewProgress, review: viewReview }[SCREEN] || viewInput;
+  put($("#main"), view());
+  LAST_KEY = structureKey();
+}
+
+// ---------------------------------------------------------------- 1 動画を入れる
+function dropZone() {
+  const picker = h("input", { type: "file", multiple: true, accept: ".mp4,.mov,.m4v,.mkv,.jpg,.jpeg,.png", style: "display:none",
+    onchange: (e) => addFiles([...e.target.files]) });
+  const drop = h("div", { class: "drop", onclick: () => picker.click() },
+    h("strong", {}, "ここに動画をドラッグ＆ドロップ"),
+    "またはクリックして選ぶ（MP4・MOV。足りないページの写真 JPEG・PNG も可）");
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
+  const pathIn = h("input", { type: "text", class: "wide", placeholder: "または、ファイルの場所を貼り付けて Enter（例: C:\\Users\\…\\IMG_1234.MOV）。大きな動画はこちらが速い" });
+  const addPath = () => {
+    for (const line of pathIn.value.split(/\r?\n/)) { const v = line.trim().replace(/^"|"$/g, ""); if (v) pending.paths.push(v); }
+    pathIn.value = ""; render();
+  };
+  pathIn.addEventListener("keydown", (e) => { if (e.key === "Enter") addPath(); });
+  const items = [...pending.files.map((f, i) => ({ name: f.name, size: f.size, rm: () => pending.files.splice(i, 1) })),
+    ...pending.paths.map((p, i) => ({ name: p, size: null, rm: () => pending.paths.splice(i, 1) }))];
+  const list = items.length ? h("ul", { class: "filelist" }, items.map(it => h("li", {},
+    h("span", {}, /\.(jpe?g|png)$/i.test(it.name) ? "🖼️" : "🎞️"), h("span", { style: "flex:1;word-break:break-all" }, it.name),
+    it.size ? h("span", { class: "muted" }, `${(it.size / 2 ** 20).toFixed(0)} MB`) : null,
+    h("button", { class: "small", onclick: () => { it.rm(); render(); } }, "外す")))) : null;
+  return { el: [drop, picker, h("div", { class: "row", style: "margin-top:8px" }, h("div", { style: "flex:1" }, pathIn), h("button", { onclick: addPath }, "追加")), list], items };
+}
+
+function viewInput() {
+  const P = S && S.project;
+  const wrap = h("div", { class: "wrap" });
+  const dz = dropZone();
+  const items = dz.items;
+
+  if (P) {
+    wrap.append(h("div", { class: "panel" }, h("h2", {}, "この本の動画"),
+      P.videos.length ? h("ul", { class: "filelist" }, P.videos.map((v, i) => h("li", {},
+        h("span", {}, `${i + 1}.`), h("span", { style: "flex:1" }, v.original_name),
+        h("span", { class: "muted" }, `${Math.round(v.duration_sec || 0)}秒`),
+        v.analysis ? h("span", { class: "chip ok" }, "解析済み") : h("span", { class: "chip warn" }, "未処理"),
+        P.videos.length > 1 ? h("button", { class: "small", title: "撮った順が違うときに", disabled: i === 0 || JOB.running, onclick: () => act({ op: "move_video", video: v.id, delta: -1 }, "順番を変えました") }, "↑ 前へ") : null,
+        v.analysis ? h("button", { class: "small", disabled: JOB.running, onclick: () => act({ op: "rotate_video", video: v.id, k: 1 }, "この動画のページを左に90°回しました。「処理を再開する」で作り直します") }, "⟲ ページの向きを回す") : null))) : h("p", { class: "muted" }, "まだありません"),
+      P.videos.some(v => v.analysis) ? h("p", { class: "muted", style: "font-size:12px" }, "ページが横倒し・逆さまになっていたら「ページの向きを回す」を押してください（1回で左に90°）。") : null,
+      h("p", { class: "muted", style: "margin-top:14px" }, "動画や写真を追加する（続きを撮った動画、撮り直したページの写真など）"),
+      dz.el,
+      h("div", { class: "row", style: "margin-top:12px" },
+        h("button", { class: "primary big", disabled: JOB.running || (!items.length && !needsWork()), onclick: addToProject },
+          items.length ? "追加して処理する" : "処理を再開する"),
+        P.order.length ? h("button", { onclick: () => go("review") }, "確認画面へ") : null)));
+    return wrap;
+  }
+
+  const firstName = items.length ? items[0].name.split(/[\\/]/).pop().replace(/\.[^.]+$/, "") : "";
+  const tv = pending.title ?? firstName;
+  const dest = h("input", { type: "text", class: "wide", value: pending.dest ?? joinPath(HOME.default_dir, safe(tv || "book")),
+    oninput: (e) => { pending.dest = e.target.value; } });
+  const title = h("input", { type: "text", class: "wide", value: tv, placeholder: "書名（PDFの名前）",
+    oninput: (e) => { pending.title = e.target.value; if (pending.dest == null) dest.value = joinPath(HOME.default_dir, safe(e.target.value || "book")); } });
+  pending.opts = pending.opts || { direction: "ltr", layout: "spread" };
+  const segBtn = (key, val, label) => h("button", { class: pending.opts[key] === val ? "on" : "", onclick: () => { pending.opts[key] = val; render(); } }, label);
+  const adv = pending.adv = pending.adv || {};
+  const field = (label, el) => h("label", { class: "f" }, label, el);
+  const sel = (key, options, def) => h("select", { onchange: (e) => { adv[key] = e.target.value; } },
+    options.map(([v, t]) => { const o = h("option", { value: String(v) }, t); o.selected = String(adv[key] ?? def) === String(v); return o; }));
+  const num = (key, ph) => h("input", { type: "number", placeholder: ph, value: adv[key] ?? "", oninput: (e) => { adv[key] = e.target.value; } });
+
+  wrap.append(
+    h("div", { class: "panel" }, h("h2", {}, "1. 動画を入れる"), dz.el),
+    h("div", { class: "panel" },
+      h("h2", {}, "2. 保存先と読み方"),
+      h("div", { style: "display:grid;gap:10px" },
+        field("書名", title),
+        field("保存先フォルダ（新しく作られます）", dest),
+        h("div", { class: "row", style: "gap:24px" },
+          field("ページの順番", h("div", { class: "seg" }, segBtn("direction", "ltr", "左→右（横書きの本）"), segBtn("direction", "rtl", "右→左（縦書きの本）"))),
+          field("撮り方", h("div", { class: "seg" }, segBtn("layout", "spread", "見開き"), segBtn("layout", "single", "1ページずつ"))))),
+      h("details", { style: "margin-top:12px" }, h("summary", {}, "詳細な設定"),
+        h("div", { class: "grid2" },
+          field("予定ページ数（任意。違えば知らせます）", num("expected_pages", "例 220")),
+          field("紙の高さ（mm、PDFの寸法）", num("page_height_mm", "257（B5）")),
+          field("湾曲補正", sel("dewarp", [["auto", "曲がりが大きいページだけ"], ["off", "しない"]], "auto")),
+          field("余白の整理", sel("margins", [["content_box", "本文の外を白に"], ["off", "しない"]], "content_box")),
+          field("文字認識の区切り方", sel("ocr_psm", [[6, "1段組の本（標準）"], [3, "段組みが多い本"]], 6)),
+          field("要確認がないとき", sel("auto_export", [[true, "自動でPDFを作る"], [false, "作らずに待つ"]], true)),
+          field("代表フレームの選び方", sel("candidate_still_both_ways", [[false, "標準"], [true, "動き出す直前を避ける（試験中）"]], false)),
+          field("HDR動画（PQ方式）", sel("allow_hdr", [[false, "受け付けない"], [true, "受け付ける（色は検証外）"]], false))))),
+    h("div", { class: "row", style: "margin-bottom:14px" },
+      h("button", { class: "primary big", disabled: !items.length, onclick: () => startNew(title.value, dest.value) }, "処理を開始"),
+      h("span", { class: "muted" }, items.length ? "途中で閉じても、あとで「前に作った本を開く」から続きを再開できます" : "動画を入れると開始できます")));
+
+  const recent = HOME.recent || [];
+  const openPath = h("input", { type: "text", class: "wide", placeholder: "フォルダの場所を貼り付けて開く" });
+  wrap.append(h("div", { class: "panel" }, h("h2", {}, "前に作った本を開く"),
+    recent.length ? h("ul", { class: "filelist" }, recent.map(r => h("li", {},
+      h("span", { style: "flex:1;min-width:0" }, h("b", {}, r.title || "（書名なし）"), h("div", { class: "muted", style: "font-size:12px;word-break:break-all" }, r.path)),
+      h("button", { onclick: () => openProject(r.path) }, "開く")))) : h("p", { class: "muted" }, "まだありません"),
+    h("div", { class: "row", style: "margin-top:8px" }, h("div", { style: "flex:1" }, openPath), h("button", { onclick: () => openProject(openPath.value.trim().replace(/^"|"$/g, "")) }, "開く"))));
+  return wrap;
+}
+function needsWork() { const P = S.project; return P.videos.some(v => !v.analysis) || S.pending.length > 0 || Object.values(P.pages).some(p => p.include && !S.ocr_current[p.id]); }
+function joinPath(a, b) { return (a || "").replace(/[\\/]+$/, "") + "\\" + b; }
+function safe(s) { return s.replace(/[<>:"/\\|?*]/g, "_").trim() || "book"; }
+function addFiles(files) {
+  for (const f of files) {
+    if (!/\.(mp4|mov|m4v|mkv|jpe?g|png)$/i.test(f.name)) { toast(`対応していない形式です: ${f.name}`); continue; }
+    pending.files.push(f);
+  }
+  render();
+}
+function uploadOne(f, params, label) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", `/api/upload?${q({ name: f.name, ...params })}`);
+    x.setRequestHeader("X-Token", TOKEN);
+    const bar = h("div", { style: "width:0%" });
+    put($("#main"), h("div", { class: "wrap" }, h("div", { class: "panel" }, h("h2", {}, "ファイルを受け取っています"),
+      h("p", {}, label), h("div", { class: "bar" }, bar),
+      h("p", { class: "muted" }, "大きな動画は時間がかかります。ファイルの場所を貼り付けると、コピーだけで速く取り込めます。"))));
+    x.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = `${Math.round(e.loaded / e.total * 100)}%`; };
+    x.onload = () => {
+      let d = null; try { d = JSON.parse(x.responseText); } catch { }
+      if (x.status === 200) resolve(d); else { const e = new Error((d && d.error) || `HTTP ${x.status}`); e.actions = d && d.actions; reject(e); }
+    };
+    x.onerror = () => reject(new Error("送信に失敗しました。"));
+    x.send(f);
+  });
+}
+async function uploadAll() {
+  const files = [...pending.files];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    S = await uploadOne(f, { allow_hdr: pending.adv && pending.adv.allow_hdr === "true" ? "1" : "0" },
+      `${f.name}（${i + 1}/${files.length}、${(f.size / 2 ** 20).toFixed(0)} MB）`);
+    pending.files.splice(pending.files.indexOf(f), 1);
+  }
+}
+async function startNew(title, dest) {
+  try {
+    const st = { direction: pending.opts.direction, layout: pending.opts.layout };
+    for (const [k, v] of Object.entries(pending.adv || {})) if (k !== "allow_hdr" && v !== "") st[k] = v;
+    S = await api("/api/create", { path: dest, title: title || null, settings: st });
+    await uploadAll();
+    const paths = [...pending.paths]; pending.paths = []; pending.title = null; pending.dest = null;
+    await api("/api/start", { paths, allow_hdr: !!(pending.adv && pending.adv.allow_hdr === "true"), export: null });
+    HOME = await api("/api/home");
+    JOB = { running: true, msg: "開始", stage: "" }; go("progress"); startPoll();
+  } catch (e) { render(); showError(e); }
+}
+async function addToProject() {
+  try {
+    await uploadAll();
+    const paths = [...pending.paths]; pending.paths = [];
+    await api("/api/start", { paths, export: false });
+    JOB = { running: true, msg: "開始", stage: "" }; go("progress"); startPoll();
+  } catch (e) { render(); showError(e); }
+}
+async function openProject(path) {
+  if (!path) return;
+  try {
+    S = await api("/api/open", { path }); SEL = null; FILTER = "review"; JOB = await api("/api/job");
+    go(S.project.order.length ? "review" : "progress");
+  } catch (e) { showError(e); }
+}
+
+// ---------------------------------------------------------------- 2 処理状況
+const STAGES = [["import", "取り込み"], ["extract", "動画の解析"], ["split", "ページ画像"], ["ocr", "文字認識"], ["export", "PDF"]];
+function viewProgress() {
+  const P = S.project, sm = S.summary;
+  const cur = JOB.running ? (JOB.stage || "import") : null;
+  const curIdx = STAGES.findIndex(s => s[0] === cur);
+  const spreads = P.segments.filter(s => s.include && s.chosen).length;
+  const exp = P.exports.at(-1);
+  const elapsed = JOB.started ? Math.round(((JOB.running ? Date.now() / 1000 : (JOB.finished || Date.now() / 1000))) - JOB.started) : null;
+  const title = JOB.running ? "処理しています" : JOB.cancelled ? "中断しました" : JOB.error ? "止まりました" : "処理状況";
+  return h("div", { class: "wrap" }, h("div", { class: "panel" },
+    h("h2", {}, title),
+    h("div", { class: "stages" }, STAGES.map(([k, label], i) => h("div", {
+      class: "stage " + (JOB.running ? (i < curIdx ? "done" : i === curIdx ? "now" : "") : stageDone(k) ? "done" : "") },
+      (JOB.running ? i < curIdx : stageDone(k)) ? "✓ " : "", label))),
+    JOB.running ? [h("div", { class: "bar" }, h("div", { "data-live": "bar", style: `width:${Math.round((JOB.frac || 0) * 100)}%` })),
+      h("p", { "data-live": "msg" }, JOB.msg || ""), elapsed != null ? h("p", { class: "muted", "data-live": "elapsed" }, `経過 ${Math.floor(elapsed / 60)}分${elapsed % 60}秒`) : null] : null,
+    JOB.cancelled ? h("div", { class: "note" }, JOB.msg) : null,
+    JOB.error ? [h("div", { class: "err" }, JOB.error), h("div", { class: "row" }, (JOB.actions || []).map(actionButton))] : null,
+    h("div", { class: "stats" },
+      h("div", { class: "stat" }, h("b", { "data-live": "spreads" }, spreads), "採用した見開き"),
+      h("div", { class: "stat" }, h("b", { "data-live": "pages" }, sm.pages), "ページ"),
+      h("div", { class: "stat" }, h("b", { "data-live": "ocr" }, sm.ocr_done), "文字認識済み"),
+      h("div", { class: "stat" }, h("b", { "data-live": "review", style: S.review.length ? "color:var(--warn)" : "" }, S.review.length), "要確認")),
+    h("div", { class: "row" },
+      JOB.running ? h("button", { class: "big", onclick: cancelJob }, "中断") :
+        h("button", { class: needsWork() ? "primary big" : "big", disabled: !needsWork(), onclick: () => runPipeline() }, needsWork() ? "再開" : "処理は完了しています"),
+      !JOB.running && P.segments.length ? h("button", { class: S.review.length || !needsWork() ? "primary big" : "big", onclick: () => { FILTER = S.review.length ? "review" : "all"; SEL = null; go("review"); } },
+        S.review.length ? `要確認 ${S.review.length} 件を直す` : "確認してPDFにする") : null),
+    !JOB.running && exp ? h("div", { class: "note" }, `PDFを出力済み: ${exp.path}（${exp.pages}ページ）`, " ",
+      h("button", { class: "small", onclick: () => api("/api/reveal", { what: "pdf" }).catch(showError) }, "PDFを開く"), " ",
+      h("button", { class: "small", onclick: () => api("/api/reveal", { what: "output" }).catch(showError) }, "フォルダを開く")) : null,
+    h("p", { class: "muted", style: "margin-top:10px;font-size:12px" }, "中断しても、ここまでの結果は保存されています。アプリを終了したりPCを閉じたりした後でも「再開」で続きから進みます。")));
+}
+function stageDone(k) {
+  const P = S.project, sm = S.summary;
+  if (k === "import") return P.videos.length > 0;
+  if (k === "extract") return P.videos.length > 0 && P.videos.every(v => v.analysis);
+  if (k === "split") return sm.pages > 0 && !S.pending.some(id => !P.pages[id] || P.pages[id].revision == null);
+  if (k === "ocr") return sm.pages > 0 && sm.ocr_done >= sm.pages;
+  if (k === "export") return P.exports.length > 0;
+  return false;
+}
+
+// ---------------------------------------------------------------- 3 確認してPDFにする
+function reviewMap() { const m = {}; for (const it of S.review) m[it.id] = it; return m; }
+function segOf(id) { return S.project.segments.find(s => s.id === id); }
+function frameOf(id) { return S.project.frames[id]; }
+function itemsFor(filter) {
+  const P = S.project, rv = reviewMap();
+  const pages = P.order.map(id => ({ kind: "page", id, page: P.pages[id], seg: segOf(P.pages[id].segment_id) }));
+  if (filter === "all") return pages;
+  if (filter === "review") {
+    const out = pages.filter(it => rv[it.id] || rv[it.seg.id]);
+    for (const s of P.segments) if (rv[s.id] && !(s.include && s.chosen)) out.push({ kind: "segment", id: s.id, seg: s });
+    for (const it of S.review) if (!P.pages[it.id] && !segOf(it.id)) out.push({ kind: "note", id: it.id, item: it });
+    return out;
+  }
+  if (filter === "unadopted") return P.segments.filter(s => !s.include && s.candidates.length).map(s => ({ kind: "segment", id: s.id, seg: s }));
+  if (filter === "excluded") return Object.values(P.pages).filter(p => p.active !== false && !p.include).map(p => ({ kind: "page", id: p.id, page: p, seg: segOf(p.segment_id) }));
+  return pages;
+}
+function reasonsOf(sel) {
+  const rv = reviewMap();
+  if (!sel) return [];
+  if (sel.kind === "page") { const p = S.project.pages[sel.id]; return [...new Set([...(rv[sel.id]?.codes || []), ...(rv[p.segment_id]?.codes || [])])]; }
+  return rv[sel.id]?.codes || [];
+}
+
+function viewReview() {
+  const P = S.project;
+  const items = itemsFor(FILTER);
+  if (!SEL || !items.some(i => i.id === SEL.id)) SEL = items.length ? { kind: items[0].kind, id: items[0].id } : null;
+  const counts = { review: itemsFor("review").length, all: P.order.length, unadopted: itemsFor("unadopted").length, excluded: itemsFor("excluded").length };
+  const fbtn = (k, label, tip) => h("button", { class: "small " + (FILTER === k ? "on" : ""), title: tip, onclick: () => { FILTER = k; SEL = null; REORDER = false; PREVIEW_FRAME = null; render(); } }, `${label} ${counts[k]}`);
+  const side = h("div", { class: "side" },
+    h("div", { class: "filters" }, fbtn("review", "要確認"), fbtn("all", "全ページ"),
+      fbtn("unadopted", "未採用の区間", "静止が短い・重複と判断して使わなかった区間"), fbtn("excluded", "除外")),
+    FILTER === "all" ? h("div", { class: "filters" },
+      h("button", { class: "small " + (REORDER ? "on" : ""), onclick: () => { REORDER = !REORDER; render(); } }, REORDER ? "並べ替え中（ドラッグで移動）" : "並べ替える"),
+      P.order_manual ? h("button", { class: "small", onclick: () => act({ op: "reset_order" }, "撮影順に戻しました") }, "撮影順に戻す") : null) : null,
+    renderList(items));
+  const pend = S.pending.length;
+  const top = h("div", { class: "row", style: "padding:8px 18px;border-bottom:1px solid var(--line);background:var(--panel)" },
+    h("span", {}, S.review.length ? `要確認 ${S.review.length} 件` : "要確認はありません", h("span", { class: "muted" }, `　全 ${P.order.length} ページ`)),
+    pend ? h("span", { class: "chip warn" }, `未反映の変更 ${pend} 件`) : null,
+    JOB.running ? h("span", { class: "chip" }, `処理中 ${Math.round((JOB.frac || 0) * 100)}%`) : null,
+    h("div", { class: "spacer" }),
+    h("button", { class: pend ? "primary" : "", disabled: !pend || JOB.running, onclick: () => runPipeline(),
+      title: "変更したページだけ作り直します" }, "変更を反映"),
+    h("button", { class: !pend && !S.review.length ? "primary" : "", disabled: JOB.running || !P.order.length, onclick: exportPdf }, "PDFを出力"));
+  return h("div", { style: "display:flex;flex-direction:column;height:100%" }, top,
+    h("div", { class: "review", style: "flex:1;min-height:0" }, side, h("div", { class: "detail" }, renderDetail())));
+}
+
+function renderList(items) {
+  const P = S.project, rv = reviewMap(), pend = new Set(S.pending);
+  const list = h("div", { class: "list" });
+  if (!items.length) { list.append(h("p", { class: "muted", style: "grid-column:1/-1" }, FILTER === "review" ? "要確認はありません 🎉" : "ありません")); return list; }
+  let dragId = null;
+  for (const it of items) {
+    let img = null, cap;
+    if (it.kind === "page") {
+      img = fileUrl(it.page.thumb || it.page.image, it.page.revision);
+      const n = P.order.indexOf(it.id);
+      cap = `${n >= 0 ? n + 1 : "-"}${it.page.side === "L" ? " 左" : it.page.side === "R" ? " 右" : ""}`;
+    } else if (it.kind === "segment") {
+      const fid = it.seg.chosen || it.seg.candidates[0];
+      img = fid ? fileUrl(frameOf(fid).thumb) : null;
+      cap = fmtT(it.seg.start_sec);
+    } else cap = "全体";
+    const flagged = rv[it.id] || (it.seg && rv[it.seg.id]);
+    const el = h("div", { class: "item " + (it.kind !== "page" ? "spread " : "") + (SEL && SEL.id === it.id ? "sel " : "") + (it.page && !it.page.include ? "excluded" : ""),
+      onclick: () => { SEL = { kind: it.kind, id: it.id }; PREVIEW_FRAME = null; render(); } },
+      img ? h("img", { src: img, loading: "lazy", draggable: "false" }) : h("div", { style: "height:90px;display:flex;align-items:center;justify-content:center", class: "muted" }, it.item ? (S.labels[it.item.codes[0]] || "") : ""),
+      h("span", { class: "cap" }, cap),
+      flagged ? h("span", { class: "flag" }, "要確認") : null,
+      (pend.has(it.id) || (it.seg && pend.has(it.seg.id))) ? h("span", { class: "pend" }, "未反映") : null);
+    if (REORDER && it.kind === "page") {
+      el.draggable = true;
+      el.addEventListener("dragstart", (e) => { dragId = it.id; e.dataTransfer.effectAllowed = "move"; });
+      el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drag-over"); });
+      el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+      el.addEventListener("drop", (e) => {
+        e.preventDefault(); el.classList.remove("drag-over");
+        if (!dragId || dragId === it.id) return;
+        const after = P.order.indexOf(dragId) < P.order.indexOf(it.id);
+        const o = P.order.filter(x => x !== dragId);
+        o.splice(o.indexOf(it.id) + (after ? 1 : 0), 0, dragId);
+        act({ op: "order", order: o }, "並べ替えました");
+      });
+    }
+    list.append(el);
+  }
+  setTimeout(() => { const s = $(".item.sel"); if (s) s.scrollIntoView({ block: "nearest" }); }, 0);
+  return list;
+}
+
+function renderDetail() {
+  const P = S.project;
+  if (!SEL) return h("div", { class: "panel" }, h("h2", {}, FILTER === "review" ? "要確認はありません" : "表示するものがありません"),
+    FILTER === "review" ? [h("p", {}, "「全ページ」で並びを確かめて、「PDFを出力」を押してください。"),
+      h("p", { class: "muted" }, "※ 撮影されなかったページがないことまでは確かめられません。ページ番号の抜けは目で確認してください。")] : null);
+  if (SEL.kind === "note") {
+    const it = reviewMap()[SEL.id];
+    return h("div", { class: "panel" }, h("h2", {}, (it && S.labels[it.codes[0]]) || SEL.id), h("p", {}, it ? (it.labels || []).join("、") : ""), it && it.kind === "video" ? h("p", { class: "muted" }, "動画全体についての注意です。内容を確かめて問題なければ確認済みにしてください。") : null,
+      h("button", { class: "primary", onclick: () => act({ op: "ack", id: SEL.id }, "確認済みにしました") }, "問題なし（確認済みにする）"));
+  }
+  const page = SEL.kind === "page" ? P.pages[SEL.id] : null;
+  const seg = page ? segOf(page.segment_id) : segOf(SEL.id);
+  const reasons = reasonsOf(SEL);
+  const pend = new Set(S.pending);
+  const isPending = page ? (pend.has(page.id) || pend.has(seg.id)) : false;
+  const sameSeg = page ? Object.values(P.pages).filter(p => p.segment_id === seg.id && p.active !== false) : [];
+  const n = page ? P.order.indexOf(page.id) : -1;
+
+  const head = h("div", { class: "dhead" },
+    h("h2", {}, page ? `${n >= 0 ? n + 1 + "ページ目" : "除外中のページ"}${page.side === "L" ? "（左）" : page.side === "R" ? "（右）" : ""}`
+      : `未採用の区間（${fmtT(seg.start_sec)}〜${fmtT(seg.end_sec)}）`),
+    h("div", { class: "chips" }, reasons.map(c => h("span", { class: "chip warn" }, S.labels[c] || c)),
+      page && !page.include ? h("span", { class: "chip bad" }, "除外中") : null,
+      seg.duplicate_of ? h("span", { class: "chip" }, "同じページの重複としてまとめた区間") : null),
+    h("div", { class: "spacer" }),
+    h("span", { class: "muted", style: "font-size:12px" }, "← → キーで前後へ"));
+
+  let mainImg = null, banner = null;
+  if (PREVIEW_FRAME) {
+    mainImg = fileUrl(frameOf(PREVIEW_FRAME).path);
+    banner = h("div", { class: "banner" }, PREVIEW_FRAME === seg.chosen ? "いま使っている候補（元の映像）です。" : "別の候補を表示中。",
+      " ", PREVIEW_FRAME !== seg.chosen || !seg.include ? h("button", { class: "small primary", onclick: () => useCandidate(seg, PREVIEW_FRAME) }, "この候補を使う") : null, " ",
+      h("button", { class: "small", onclick: () => { PREVIEW_FRAME = null; render(); } }, "戻る"));
+  } else if (page) {
+    mainImg = `/api/page_view?${q({ pid: page.id, mode: VIEW, rev: page.revision, w: 1400 })}`;
+    if (isPending) banner = h("div", { class: "banner" }, "変更はまだ反映されていません。上の「変更を反映」で変えた見開きだけ作り直します。",
+      VIEW === "final" ? "（いま表示している「補正後」は前の結果です）" : "");
+  } else {
+    const fid = seg.chosen || seg.candidates[0];
+    mainImg = fid ? fileUrl(frameOf(fid).path) : null;
+  }
+  const stage = h("div", { class: "stagebox" }, mainImg ? h("img", { src: mainImg, onclick: (e) => e.currentTarget.parentElement.classList.toggle("zoom") }) : h("p", { class: "muted" }, "画像がありません"));
+  const viewBtns = page && !PREVIEW_FRAME ? h("div", { class: "row", style: "margin-bottom:8px" }, h("div", { class: "seg" },
+    [["final", "補正後"], ["plain", "補正前（切り抜きだけ）"], ["frame", "元の映像"]].map(([k, t]) => h("button", { class: VIEW === k ? "on" : "", onclick: () => { VIEW = k; render(); } }, t))),
+    h("span", { class: "muted", style: "font-size:12px" }, "画像クリックで拡大")) : null;
+
+  const cands = seg.candidates.length ? h("div", {},
+    h("h3", { style: "margin:14px 0 0;font-size:14px" }, `この見開きの候補（${seg.candidates.length}）`,
+      h("span", { class: "muted", style: "font-weight:400;font-size:12px" }, "　クリックで大きく表示。指が入っていないものを選んでください")),
+    h("div", { class: "cands" }, seg.candidates.map(fid => {
+      const f = frameOf(fid);
+      return h("div", { class: "cand " + (fid === seg.chosen && seg.include ? "cur " : "") + (fid === PREVIEW_FRAME ? "sel" : ""), onclick: () => { PREVIEW_FRAME = fid; render(); } },
+        h("img", { src: fileUrl(f.thumb), loading: "lazy" }),
+        h("span", { class: "cap" }, `${f.source === "photo" ? "写真" : fmtT(f.time_sec)}${fid === seg.chosen && seg.include ? " ✓使用中" : ""}`));
+    }))) : null;
+
+  const opts = S.page_options[seg.id] || {};
+  const optBtn = (key, val, label) => h("button", { class: opts[key] === val ? "on" : "", onclick: () => { if (opts[key] !== val) act({ op: "page_options", segment: seg.id, values: { [key]: val } }, "変えました。「変更を反映」で作り直します"); } }, label);
+  const tools = h("div", { class: "tools" },
+    h("h3", {}, "フレームを替える"),
+    seg.video_id ? h("button", { onclick: () => openFramePicker(seg) }, "動画で前後のコマを探す…") : null,
+    h("button", { onclick: () => pickPhoto(seg.id) }, "写真を追加する…"),
+    seg.chosen && page ? [h("h3", {}, "切り抜き"),
+      h("button", { onclick: () => openGeometry(seg) }, "分割線・切り抜きを直す…"),
+      seg.manual_geometry ? h("button", { class: "small", onclick: () => act({ op: "clear_geometry", segment: seg.id }, "自動に戻しました") }, "自動の切り抜きに戻す") : null,
+      h("h3", {}, "補正（この見開きだけ）"),
+      h("div", { class: "seg" }, optBtn("dewarp", "auto", "湾曲補正する"), optBtn("dewarp", "off", "しない")),
+      h("div", { class: "seg" }, optBtn("margins", "content_box", "余白を白に"), optBtn("margins", "off", "そのまま"))] : null,
+    h("h3", {}, "使う・使わない"),
+    page ? h("button", { onclick: () => act({ op: "include", id: page.id, value: !page.include }, page.include ? "除外しました" : "戻しました") }, page.include ? "このページを除外" : "このページを戻す") : null,
+    page && sameSeg.length > 1 && seg.include ? h("button", { class: "small", onclick: () => act({ op: "include", id: seg.id, value: false }, "見開きごと除外しました") }, "見開きごと除外") : null,
+    !page ? h("button", { class: "primary", disabled: !seg.candidates.length, onclick: () => adoptSegment(seg) }, "この区間を採用する") : null,
+    reasons.length ? h("button", { onclick: () => ackAll(page, seg) }, "問題なし（確認済みにする）") : null,
+    page && page.ocr && page.ocr.error ? h("button", { onclick: () => act({ op: "image_only", page: page.id, value: true }, "画像だけで残します") }, "文字なし（画像だけ）で残す") : null,
+    page && page.ocr && page.ocr.txt ? h("button", { class: "small", onclick: () => showOcr(page) }, "認識した文字を見る") : null);
+
+  return h("div", {}, head, h("div", { class: "viewer" }, h("div", { style: "min-width:0" }, banner, viewBtns, stage, cands), tools));
+}
+async function useCandidate(seg, fid) {
+  PREVIEW_FRAME = null;
+  await act({ op: "choose", segment: seg.id, frame: fid }, "候補を差し替えました。「変更を反映」で作り直します");
+}
+async function adoptSegment(seg) {
+  if (PREVIEW_FRAME && PREVIEW_FRAME !== seg.chosen) await act({ op: "choose", segment: seg.id, frame: PREVIEW_FRAME });
+  PREVIEW_FRAME = null;
+  await act({ op: "include", id: seg.id, value: true }, "採用しました。「変更を反映」でページを作ります");
+}
+async function ackAll(page, seg) {
+  const rv = reviewMap();
+  if (page && rv[page.id] && !(await act({ op: "ack", id: page.id }))) return;
+  if (rv[seg.id]) await act({ op: "ack", id: seg.id });
+  toast("確認済みにしました");
+}
+async function showOcr(page) {
+  const r = await fetch(fileUrl(page.ocr.txt)); const t = await r.text();
+  modal(h("div", {}, h("h2", {}, "認識した文字（PDFに埋め込まれる文字）"), h("pre", { style: "white-space:pre-wrap;max-height:65vh;overflow:auto;background:var(--chip);padding:10px;border-radius:8px" }, t),
+    h("div", { class: "row" }, h("div", { class: "spacer" }), h("button", { onclick: closeModal }, "閉じる"))));
+}
+function pickPhoto(afterSeg) {
+  const inp = h("input", { type: "file", accept: ".jpg,.jpeg,.png", multiple: true });
+  inp.onchange = async () => {
+    for (const f of inp.files) {
+      try { S = await uploadOne(f, { after: afterSeg }, f.name); }
+      catch (e) { render(); showError(e); return; }
+    }
+    render();
+    toast("写真を追加しました（この見開きの後ろに入ります）。不要になった元のページは除外してください", 6000);
+  };
+  inp.click();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (SCREEN !== "review" || $("#modal").children.length || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+  const items = itemsFor(FILTER); const i = items.findIndex(it => SEL && it.id === SEL.id);
+  const j = Math.max(0, Math.min(items.length - 1, i + (e.key === "ArrowRight" ? 1 : -1)));
+  if (items[j]) { SEL = { kind: items[j].kind, id: items[j].id }; PREVIEW_FRAME = null; render(); }
+  e.preventDefault();
+});
+
+// ---------------------------------------------------------------- PDF出力
+function ask(title, body, okLabel) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    modal(h("div", {}, h("h2", {}, title), body,
+      h("div", { class: "row", style: "margin-top:12px" }, h("div", { class: "spacer" }),
+        h("button", { onclick: () => closeModal() }, "やめる"),
+        h("button", { class: "primary", onclick: () => { fin(true); closeModal(); } }, okLabel))),
+      () => fin(false));
+  });
+}
+async function exportPdf() {
+  const nPend = S.pending.length, nRev = S.review.length;
+  if (nPend || nRev) {
+    const body = h("div", {},
+      nPend ? h("p", {}, `未反映の変更が ${nPend} 件あります。先に反映（変えた見開きだけ作り直し）してから出力します。`) : null,
+      nRev ? [h("p", {}, `要確認が ${nRev} 件残っています。このまま出力すると、これらもそのままPDFに入ります。`),
+        h("ul", { style: "margin:0;max-height:30vh;overflow:auto" }, S.review.map(it => {
+          const pg = S.project.pages[it.id];
+          const where = pg ? `${S.project.order.indexOf(it.id) + 1}ページ目` : it.kind === "segment" ? `${fmtT((segOf(it.id) || {}).start_sec)} の見開き` : "";
+          return h("li", {}, `${where} ${it.labels.join("、")}`);
+        }))] : null);
+    if (!(await ask(nRev ? "要確認が残っています" : "PDFを出力", body, nRev ? "このまま出力する" : "反映して出力する"))) return;
+  }
+  try {
+    if (nPend) await api("/api/run", { export: true, force: nRev > 0 });
+    else await api("/api/export", { force: nRev > 0 });
+    JOB = { running: true, msg: "PDFを作っています", stage: nPend ? "split" : "export" }; go("progress"); startPoll();
+  } catch (e) { showError(e); }
+}
+function exportDone(rec) {
+  modal(h("div", {}, h("h2", {}, "PDFができました"), h("p", { style: "word-break:break-all" }, rec.path),
+    h("p", { class: "muted" }, `${rec.pages}ページ。保存したファイルを開き直して、ページ数と文字層があることを確かめました。`),
+    h("div", { class: "row" }, h("button", { class: "primary", onclick: () => api("/api/reveal", { what: "pdf" }).catch(showError) }, "PDFを開く"),
+      h("button", { onclick: () => api("/api/reveal", { what: "output" }).catch(showError) }, "フォルダを開く"), h("div", { class: "spacer" }),
+      h("button", { onclick: () => { closeModal(); go("review"); } }, "閉じる"))));
+}
+
+// ---------------------------------------------------------------- モーダル
+let modalCleanup = null;
+function modal(content, cleanup) {
+  if (modalCleanup) modalCleanup();
+  modalCleanup = cleanup || null;
+  const bg = h("div", { class: "modal-bg", onclick: (e) => { if (e.target === bg) closeModal(); } }, h("div", { class: "modal" }, content));
+  put($("#modal"), bg);
+}
+function closeModal() { put($("#modal")); if (modalCleanup) { const c = modalCleanup; modalCleanup = null; c(); } }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#modal").children.length) closeModal(); });
+
+function openFramePicker(seg) {
+  const P = S.project;
+  const v = P.videos.find(x => x.id === seg.video_id);
+  const cf = seg.chosen ? frameOf(seg.chosen) : null;
+  let t = cf && cf.time_sec != null ? cf.time_sec : seg.start_sec;
+  const img = h("img", { style: "max-width:100%;max-height:60vh;display:block;margin:auto;background:var(--chip)" });
+  const lbl = h("b", {});
+  const range = h("input", { type: "range", min: 0, max: v.duration_sec || 1, step: 0.01, value: t, style: "flex:1;min-width:200px" });
+  let busy = false, timer = null, url = null;
+  const show = async (target, step = 0) => {
+    busy = true; lbl.textContent = "読み込み中…";
+    try {
+      const r = await fetch(`/api/preview?${q({ video: v.id, time: target, step, w: 1280 })}`, { headers: { "X-Token": TOKEN } });
+      if (!r.ok) throw new Error((await r.json()).error);
+      t = parseFloat(r.headers.get("X-Frame-Time")); range.value = t;
+      if (url) URL.revokeObjectURL(url);
+      url = URL.createObjectURL(await r.blob()); img.src = url;
+      const inside = t >= seg.start_sec - 0.01 && t <= seg.end_sec + 0.01;
+      lbl.textContent = `${fmtT(t)}　${inside ? "（ページが止まっている区間の中）" : "（区間の外）"}`;
+    } catch (e) { lbl.textContent = String(e.message || e); }
+    busy = false;
+  };
+  range.oninput = () => { clearTimeout(timer); timer = setTimeout(() => show(parseFloat(range.value)), 200); };
+  const stepBtn = (label, step, sec) => h("button", { onclick: () => { if (!busy) show(sec ? Math.max(0, t + sec) : t, step); } }, label);
+  const keys = (e) => {
+    if (busy) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); show(t, 1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); show(t, -1); }
+  };
+  document.addEventListener("keydown", keys);
+  modal(h("div", {},
+    h("h2", {}, `動画で探す（${fmtT(seg.start_sec)}〜${fmtT(seg.end_sec)} の見開き）`),
+    h("p", { class: "muted", style: "margin-top:0" }, "指や影が文字にかかっていないコマを探して「このコマを使う」。← → キーで1コマずつ動きます。"),
+    img,
+    h("div", { class: "row", style: "margin-top:10px" }, stepBtn("◀◀ 1秒", 0, -1), stepBtn("◀ 1コマ", -1), range, stepBtn("1コマ ▶", 1), stepBtn("1秒 ▶▶", 0, 1)),
+    h("div", { class: "row", style: "margin-top:10px" }, lbl, h("div", { class: "spacer" }),
+      h("button", { class: "primary", onclick: async () => { if (busy) return; const ok = await act({ op: "add_frame", video: v.id, t, segment: seg.id }, "このコマを使います。「変更を反映」で作り直します"); if (ok) { PREVIEW_FRAME = null; closeModal(); } } }, "このコマを使う"),
+      h("button", { onclick: closeModal }, "キャンセル"))),
+    () => { document.removeEventListener("keydown", keys); if (url) URL.revokeObjectURL(url); });
+  show(t);
+}
+
+function openGeometry(seg) {
+  const P = S.project, f = frameOf(seg.chosen);
+  const g0 = (seg.manual_geometry && seg.manual_geometry.frame_id === seg.chosen) ? seg.manual_geometry
+    : (seg.geometry && seg.geometry.frame_id === seg.chosen ? seg.geometry : null);
+  const W = f.width, H = f.height;
+  let bbox = g0 && g0.bbox ? [...g0.bbox] : [0, 0, W, H];
+  const spread = P.settings.layout === "spread";
+  let gutter = g0 && g0.gutter_x != null ? g0.gutter_x : Math.round((bbox[0] + bbox[2]) / 2);
+  let mode = spread ? "gutter" : "bbox";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("preserveAspectRatio", "none");
+  const draw = () => {
+    svg.innerHTML = `<rect x="${bbox[0]}" y="${bbox[1]}" width="${bbox[2] - bbox[0]}" height="${bbox[3] - bbox[1]}" fill="none" stroke="#2f6fdf" stroke-width="${W / 250}"/>` +
+      (spread ? `<line x1="${gutter}" x2="${gutter}" y1="${bbox[1]}" y2="${bbox[3]}" stroke="#e5484d" stroke-width="${W / 300}"/>` : "");
+  };
+  draw();
+  const pt = (e) => { const r = svg.getBoundingClientRect(); return [Math.max(0, Math.min(W, Math.round((e.clientX - r.left) / r.width * W))), Math.max(0, Math.min(H, Math.round((e.clientY - r.top) / r.height * H)))]; };
+  let start = null;
+  svg.addEventListener("pointerdown", (e) => { const p = pt(e); svg.setPointerCapture(e.pointerId); if (mode === "gutter") { gutter = p[0]; draw(); start = "g"; } else start = p; });
+  svg.addEventListener("pointermove", (e) => {
+    if (!start) return; const p = pt(e);
+    if (start === "g") gutter = p[0];
+    else bbox = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])];
+    draw();
+  });
+  svg.addEventListener("pointerup", () => { start = null; });
+  const modeBtns = h("div", { class: "seg" });
+  const upd = () => put(modeBtns,
+    spread ? h("button", { class: mode === "gutter" ? "on" : "", onclick: () => { mode = "gutter"; upd(); } }, "分割線（赤）をクリック・ドラッグで置く") : null,
+    h("button", { class: mode === "bbox" ? "on" : "", onclick: () => { mode = "bbox"; upd(); } }, "紙の範囲（青）をドラッグで囲む"));
+  upd();
+  modal(h("div", {},
+    h("h2", {}, "分割線・切り抜きを直す"),
+    h("div", { class: "row", style: "margin-bottom:8px" }, modeBtns),
+    h("div", { class: "geo-wrap" }, h("img", { src: fileUrl(f.path), draggable: "false" }), svg),
+    h("div", { class: "row", style: "margin-top:10px" },
+      h("span", { class: "muted" }, "この候補を使っている間は、自動処理で上書きされません。"), h("div", { class: "spacer" }),
+      h("button", { class: "primary", onclick: async () => {
+        if (bbox[2] - bbox[0] < W / 10 || bbox[3] - bbox[1] < H / 10) { toast("範囲が小さすぎます"); return; }
+        if (spread && (gutter <= bbox[0] || gutter >= bbox[2])) { toast("分割線が紙の範囲の外です"); return; }
+        const ok = await act({ op: "geometry", segment: seg.id, bbox, gutter_ratio: spread ? gutter / W : null }, "保存しました。「変更を反映」でこの見開きだけ作り直します");
+        if (ok) closeModal();
+      } }, "保存"),
+      h("button", { onclick: closeModal }, "キャンセル"))));
+}
+
+load();
+</script>
+</body>
+</html>
