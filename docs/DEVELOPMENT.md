@@ -15,6 +15,53 @@ vbs choose / include / exclude / ack / gutter ...   # 確認画面と同じ操�
 
 `vbs` は `.venv\Scripts\vbs.exe` にあります。`python -m vbs` でも起動できます。
 
+## 画面のAPI（AIエージェントや自動化から操作するとき）
+
+`VideoBookScanner.bat`（`vbs ui`）が開く画面は、`127.0.0.1` だけで待ち受けるHTTPサーバーです。黒い画面に出るアドレス `http://127.0.0.1:<ポート>/#t=<トークン>` のトークンを、ヘッダー `X-Token: <トークン>`（または `?t=<トークン>`）で付けて呼びます。画面が開いている間はプロジェクトがロックされるので、`vbs` コマンドや `project.json` の直接編集ではなく、このAPIを使ってください。
+
+### 読む
+
+| 要求 | 返すもの |
+|---|---|
+| `GET /api/state` | プロジェクト全体（`project`：区間 `segments`、フレーム `frames`、ページ `pages`、出力順 `order`）、要確認の一覧 `review`（`id`・`codes`・`labels`）、理由コードの表示名 `labels`、未反映のページ `pending`、見開きごとの補正 `page_options` |
+| `GET /api/job` | 処理の状態（`running`・`stage`・`frac`・`msg`・`error`・`result`） |
+| `GET /files/<プロジェクト内の相対パス>` | ページ画像（`pages[].image`）、候補フレーム（`frames[].path`）、縮小画像（`thumb`）、OCRの文字（`pages[].ocr.txt`）など |
+| `GET /api/page_view?pid=<ページID>&mode=final\|plain\|frame&w=1400` | 仕上がり／補正前（切り抜きだけ）／元の映像（紙の範囲と分割線つき）のJPEG |
+| `GET /api/preview?video=<動画ID>&time=<秒>&step=<±コマ数>&w=1280` | 動画のその時刻（から step コマ動いた）フレームのJPEG。実際の時刻はヘッダー `X-Frame-Time` |
+
+ID の形：区間 `s0001`、ページ `s0001-L` / `s0001-R`（1ページずつのときは `-S`）、フレーム `f0001`、動画 `v0001`。
+
+### 直す（`POST /api/action`、本文はJSON。成功すると新しい状態を返す）
+
+| `op` | 内容 | 例 |
+|---|---|---|
+| `choose` | 区間の候補を替える | `{"op":"choose","segment":"s0012","frame":"f0034"}` |
+| `include` | ページ・区間を使う／使わない。区間を `true` にすると「未採用の区間」を採用する | `{"op":"include","id":"s0042","value":true}` |
+| `ack` | 要確認を「確認済み」にする | `{"op":"ack","id":"s0098-L"}` |
+| `add_frame` | 動画の任意の時刻のフレームを、その区間の候補に加えて使う | `{"op":"add_frame","video":"v0001","t":244.37,"segment":"s0099"}` |
+| `geometry` | 紙の範囲と分割線を手で指定する（元フレームの画素座標、分割線はフレーム幅に対する割合） | `{"op":"geometry","segment":"s0214","bbox":[270,140,3060,2120],"gutter_ratio":0.447}` |
+| `clear_geometry` | 手の指定をやめて自動に戻す | `{"op":"clear_geometry","segment":"s0214"}` |
+| `page_options` | 見開きごとの補正（`dewarp`：`auto`/`off`、`margins`：`content_box`/`off`） | `{"op":"page_options","segment":"s0002","values":{"dewarp":"off"}}` |
+| `image_only` | 文字認識に失敗したページを画像だけで残す | `{"op":"image_only","page":"s0044-L","value":true}` |
+| `order` / `reset_order` | 出力順を指定する／撮影順に戻す | `{"op":"order","order":["s0001-L", "..."]}` |
+| `rotate_video` | 動画のページを左に90°×k 回す | `{"op":"rotate_video","video":"v0001","k":1}` |
+
+### 処理する
+
+| 要求 | 内容 |
+|---|---|
+| `POST /api/run` `{"export":false}` | 変更を反映（変えたページだけ作り直してOCR）。`/api/job` の `running` が `false` になるまで待つ |
+| `POST /api/export` `{"force":false}` | PDFを出力。要確認が残っているときは `force:true` が必要 |
+| `POST /api/cancel` | 処理を中断 |
+
+処理中（`running:true`）は `/api/action` を受け付けません。
+
+### 選別のこつ（実際の本で効いたもの）
+
+- ページ番号は、ページ画像の下の外側（左ページは左下、右ページは右下）の、高さ70〜97%あたりにあることが多い。その部分だけを切り出して並べると、数百ページでも番号を読み通せる
+- 「重複として統合」された区間（`duplicate_of` あり）のほうがきれいで、採用された側がめくり途中ということがある。番号が抜けていたら、その前後の未採用区間を見る
+- 背景が白い（シーツなど）と紙の範囲を取り違える。`mode=frame` で青い枠が見開きを囲んでいるかを見て、ずれていれば `geometry` で直す
+
 ## 処理の流れ
 
 1. **動画の検査**（`vbs/video.py`）：拡張子ではなく中身で形式・回転情報・色特性を調べます。フレームは表示時刻PTSで扱うので、可変fpsにも対応します
